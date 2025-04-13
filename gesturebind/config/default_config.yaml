@@ -1,0 +1,67 @@
+# GestureBind Default Configuration
+
+app:
+  version: "1.0.0"
+  save_user_data_path: "~/gesturebind/data"
+  log_level: "info"
+
+camera:
+  device_id: 0
+  width: 640
+  height: 480
+  fps: 30
+  flip_horizontal: true  # Mirror camera feed for more intuitive gestures
+
+detection:
+  engine: "mediapipe"  # Options: mediapipe, yolov8
+  confidence_threshold: 0.7
+  cooldown_ms: 500  # Cooldown between gesture detections to prevent rapid triggering
+  min_detection_duration_ms: 200  # Minimum duration a gesture must be held to trigger
+
+ui:
+  theme: "system"  # Options: system, light, dark
+  minimize_to_tray: true
+  start_minimized: false
+  overlay_feedback: true
+  overlay_timeout_ms: 1500
+  show_preview: true
+  show_fps: true
+  camera_preview_fps: 15  # UI update rate for camera preview (to reduce CPU usage)
+
+actions:
+  default_profile: "default"
+  enable_shortcuts: true
+  gesture_trigger_mode: "single"  # Options: single, continuous, toggle
+
+profiles:
+  default:
+    open_palm: "keyboard:space"
+    fist: "keyboard:escape"
+    pointing: "mouse:mouse_click"
+    peace_sign: "media:play_pause"
+    thumbs_up: "keyboard:page_down"
+    thumbs_down: "keyboard:page_up"
+  
+  media:
+    open_palm: "media:play_pause"
+    fist: "media:mute"
+    thumbs_up: "media:volume_up"
+    thumbs_down: "media:volume_down"
+    pointing_right: "media:next_track"
+    pointing_left: "media:previous_track"
+  
+  presentation:
+    pointing_right: "keyboard:right"
+    pointing_left: "keyboard:left"
+    open_palm: "keyboard:f5"
+    fist: "keyboard:escape"
+    peace_sign: "keyboard:b"  # Black screen in most presentation tools
+
+# Advanced settings (for developers and power users)
+advanced:
+  debug_mode: false
+  gesture_data_folder: "~/gesturebind/data/gestures"
+  model_folder: "~/gesturebind/data/models"
+  max_log_files: 10
+  max_log_size_mb: 5
+  landmark_smoothing: true  # Apply smoothing to landmarks for more stable detection
