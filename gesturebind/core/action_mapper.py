@@ -145,16 +145,25 @@ class ActionMapper:
         # Check if gesture has a mapping in active profile
         gesture_mappings = self.active_profile.get("gesture_mappings", {})
         
-        if gesture_name not in gesture_mappings:
-            logger.debug(f"No mapping found for gesture: {gesture_name}")
-            return None, None, "No action mapped"
+        # First try the new format with gesture_mappings dict
+        if gesture_name in gesture_mappings:
+            action_config = gesture_mappings[gesture_name]
+            action_type = action_config.get("type")
+            action_data = action_config.get("data")
+            description = action_config.get("description", f"Action: {action_type}")
+            return action_type, action_data, description
         
-        action_config = gesture_mappings[gesture_name]
-        action_type = action_config.get("type")
-        action_data = action_config.get("data")
-        description = action_config.get("description", f"Action: {action_type}")
-        
-        return action_type, action_data, description
+        # Fall back to the old format (direct mapping in profile)
+        elif gesture_name in self.active_profile:
+            action_string = self.active_profile[gesture_name]
+            # Parse the action string (format: "type:data")
+            if ":" in action_string:
+                action_type, action_data = action_string.split(":", 1)
+                return action_type, action_data, f"Action: {action_string}"
+            
+        # No mapping found
+        logger.debug(f"No mapping found for gesture: {gesture_name}")
+        return None, None, "No action mapped"
     
     def execute_action(self, action_type, action_data):
         """
@@ -206,9 +215,26 @@ class ActionMapper:
             if system == "Windows":
                 keyboard.press_and_release(key_name)
             else:
-                # Use pynput for Linux/macOS
-                with self.keyboard_controller.pressed(getattr(keyboard.Key, key_name, key_name)):
-                    pass  # Just press and release
+                # Handle special keys for Linux/macOS
+                if key_name.lower() in ['ctrl', 'control']:
+                    key = keyboard.Key.ctrl
+                elif key_name.lower() in ['alt']:
+                    key = keyboard.Key.alt
+                elif key_name.lower() in ['shift']:
+                    key = keyboard.Key.shift
+                elif key_name.lower() in ['cmd', 'command', 'super', 'win', 'meta']:
+                    key = keyboard.Key.cmd
+                elif hasattr(keyboard.Key, key_name.lower()):
+                    # For other special keys like space, escape, etc.
+                    key = getattr(keyboard.Key, key_name.lower())
+                else:
+                    # For regular character keys
+                    key = key_name
+                
+                # Press and release the key
+                self.keyboard_controller.press(key)
+                self.keyboard_controller.release(key)
+                
             return True
         except Exception as e:
             logger.error(f"Failed to execute keypress: {e}")
@@ -224,15 +250,32 @@ class ActionMapper:
             else:
                 # Parse hotkey string for pynput
                 keys = hotkey_combo.split('+')
+                pressed_keys = []
+                
                 # Map special keys if needed
-                keys = [getattr(keyboard.Key, k, k) for k in keys]
+                for k in keys:
+                    # Handle special keys
+                    if k.lower() in ['ctrl', 'control']:
+                        pressed_keys.append(keyboard.Key.ctrl)
+                    elif k.lower() in ['alt']:
+                        pressed_keys.append(keyboard.Key.alt)
+                    elif k.lower() in ['shift']:
+                        pressed_keys.append(keyboard.Key.shift)
+                    elif k.lower() in ['cmd', 'command', 'super', 'win', 'meta']:
+                        pressed_keys.append(keyboard.Key.cmd)
+                    elif hasattr(keyboard.Key, k.lower()):
+                        # For other special keys like space, escape, etc.
+                        pressed_keys.append(getattr(keyboard.Key, k.lower()))
+                    else:
+                        # For regular character keys
+                        pressed_keys.append(k)
                 
                 # Press all keys
-                for k in keys:
+                for k in pressed_keys:
                     self.keyboard_controller.press(k)
                 
                 # Release all keys in reverse order
-                for k in reversed(keys):
+                for k in reversed(pressed_keys):
                     self.keyboard_controller.release(k)
             
             return True

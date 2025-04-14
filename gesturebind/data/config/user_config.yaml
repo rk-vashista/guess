@@ -51,8 +51,8 @@ profiles:
   default:
     gesture_mappings:
       peace:
-        data: ctrl+l
-        description: 'Hotkey: ctrl+l'
+        data: ctrl+v
+        description: 'Hotkey: ctrl+v'
         type: hotkey
   media:
     gesture_mappings: {}

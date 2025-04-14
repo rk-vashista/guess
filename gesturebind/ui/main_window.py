@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (QMainWindow, QAction, QTabWidget, QWidget,
                             QSystemTrayIcon, QMenu, QStatusBar, QMessageBox,
                             QGridLayout, QCheckBox, QComboBox, QApplication,
                             QFileDialog)  # Added QFileDialog import
-from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QTimer, QSize
+from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QTimer, QSize, QObject
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 
 # Fix imports by adding the project root to sys.path if necessary
@@ -36,6 +36,15 @@ from ui.action_overlay import ActionOverlay  # Import the ActionOverlay componen
 from utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
+class ThreadSafeEventBridge(QObject):
+    """Bridge class to safely communicate between threads using signals"""
+    # Define Qt signals for thread-safe communication
+    action_signal = pyqtSignal(str, str, str)  # (gesture_name, action_data, description)
+    
+    def emit_action(self, gesture, action, description):
+        """Emit the action signal with the provided parameters"""
+        self.action_signal.emit(gesture, action, description)
 
 class MainWindow(QMainWindow):
     """
@@ -66,6 +75,10 @@ class MainWindow(QMainWindow):
         # Initialize the action overlay for gesture feedback
         self.action_overlay = ActionOverlay()
         
+        # Create thread-safe event bridge
+        self.event_bridge = ThreadSafeEventBridge()
+        self.event_bridge.action_signal.connect(self._handle_action_signal)
+        
         # Set overlay timeout from config
         overlay_timeout = self.config.get("ui", {}).get("overlay_timeout_ms", 1500)
         self.action_overlay.set_timeout(overlay_timeout)
@@ -89,11 +102,6 @@ class MainWindow(QMainWindow):
         """Initialize the user interface"""
         self.setWindowTitle("GestureBind - Gesture-Based Shortcut Mapper")
         self.setMinimumSize(900, 700)
-        
-        # Create action overlay for gesture feedback
-        self.action_overlay = ActionOverlay(self)
-        overlay_timeout = self.config.get("ui", {}).get("overlay_timeout_ms", 1500)
-        self.action_overlay.set_timeout(overlay_timeout)
         
         # Create main widget and layout
         central_widget = QWidget()
@@ -454,11 +462,9 @@ class MainWindow(QMainWindow):
     
     def on_action_executed(self, gesture, action, description):
         """Handler for action executed events from GestureManager"""
-        self.action_label.setText(f"Action: {description}")
-        
-        # Show action overlay
-        if self.config.get("ui", {}).get("overlay_feedback", True):
-            self.action_overlay.show_action(gesture, description)
+        # Instead of directly updating UI, use the thread-safe signal
+        # This will be called from the background thread, so we need to use the signal
+        self.event_bridge.emit_action(gesture, action, description)
     
     @pyqtSlot(str)
     def _change_profile(self, profile_name):
@@ -619,3 +625,13 @@ class MainWindow(QMainWindow):
             
             # Close the application
             event.accept()
+    
+    @pyqtSlot(str, str, str)
+    def _handle_action_signal(self, gesture, action, description):
+        """Handle action signals from the background thread safely in the UI thread"""
+        # Update the action label in the UI
+        self.action_label.setText(f"Action: {description}")
+        
+        # Show action overlay if enabled
+        if self.config.get("ui", {}).get("overlay_feedback", True):
+            self.action_overlay.show_action(gesture, description)

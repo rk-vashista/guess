@@ -89,6 +89,10 @@ class ActionOverlay(QWidget):
     
     def show_action(self, gesture_name, action_description):
         """Show the overlay with gesture and action information"""
+        # Make sure we're running on the main thread
+        if QApplication.instance().thread() != self.thread():
+            logger.warning("ActionOverlay: show_action called from a non-GUI thread - operations may fail")
+        
         # Set text content
         self.gesture_label.setText(gesture_name.replace('_', ' ').title())
         self.action_label.setText(action_description)
