@@ -86,8 +86,8 @@ class GestureClassifier:
                     labels.append(class_idx)
             
             # Convert to numpy arrays for ML processing
-            features = np.array(features)
-            labels = np.array(labels)
+            features = np.array(features, dtype=np.float32)
+            labels = np.array(labels, dtype=np.int32)
             
             if len(features) == 0 or len(labels) == 0:
                 logger.error("No training data provided")
@@ -101,19 +101,36 @@ class GestureClassifier:
                 self.model.fit(features, labels)
                 logger.info("Trained KNN classifier successfully")
             elif self.model_type == "nn" and TF_AVAILABLE:
+                # Force CPU usage to avoid CUDA errors
+                import os
+                os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+                
+                # Verify we're using CPU
+                import tensorflow as tf
+                logger.info(f"Using TensorFlow devices: {tf.config.list_physical_devices()}")
+                
                 # Create a neural network model
-                self.model = self._create_neural_network(features.shape[1], len(self.gesture_classes))
+                input_size = features.shape[1]
+                num_classes = len(self.gesture_classes)
+                
+                # Handle the case where we have only one sample per class
+                if len(features) < num_classes * 2:
+                    logger.error("Not enough samples for neural network training. Need at least 2 samples per gesture class.")
+                    return False
+                
+                self.model = self._create_neural_network(input_size, num_classes)
                 
                 # Convert labels to one-hot encoded format
-                one_hot_labels = keras.utils.to_categorical(labels, num_classes=len(self.gesture_classes))
+                one_hot_labels = tf.keras.utils.to_categorical(labels, num_classes=num_classes)
                 
-                # Train the model
+                # Train the model with validation split to prevent overfitting
                 self.model.fit(
                     features, 
                     one_hot_labels,
-                    epochs=100,  # Can be configured
-                    batch_size=16,  # Can be configured 
-                    verbose=0  # Quiet mode
+                    epochs=100,
+                    batch_size=min(16, len(features)//2 or 1),  # Ensure batch size is appropriate
+                    verbose=1,  # Show progress
+                    validation_split=0.2  # Use 20% of data for validation
                 )
                 logger.info("Trained neural network classifier successfully")
             else:
@@ -139,6 +156,8 @@ class GestureClassifier:
             return True
         except Exception as e:
             logger.error(f"Error training gesture model: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def classify_gesture(self, feature_vector):

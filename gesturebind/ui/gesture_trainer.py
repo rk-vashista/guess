@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 import datetime
 from pathlib import Path
+import random
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QListWidget, QListWidgetItem, QMessageBox,
@@ -33,6 +34,118 @@ except ImportError:
     GestureClassifier = None
 
 logger = logging.getLogger(__name__)
+
+
+class GestureAugmenter:
+    """Class for augmenting gesture samples to improve training with few samples"""
+    
+    @staticmethod
+    def _ensure_numeric_format(landmarks):
+        """Convert landmarks from dictionary format to numeric array if needed"""
+        if isinstance(landmarks, list) and landmarks and isinstance(landmarks[0], dict):
+            # Convert from list of dicts to flat array
+            numeric_landmarks = []
+            for lm in landmarks:
+                numeric_landmarks.extend([lm['x'], lm['y'], lm['z']])
+            return np.array(numeric_landmarks)
+        elif isinstance(landmarks, dict):
+            # Single landmark dict
+            return np.array([landmarks['x'], landmarks['y'], landmarks['z']])
+        else:
+            # Already in numeric format
+            return np.array(landmarks)
+    
+    @staticmethod
+    def center_landmarks(landmarks):
+        """Centers landmarks to their centroid."""
+        # Convert to numeric format first
+        landmarks = GestureAugmenter._ensure_numeric_format(landmarks)
+        landmarks = landmarks.reshape(-1, 3)
+        center = np.mean(landmarks, axis=0)
+        return (landmarks - center).flatten()
+
+    @staticmethod
+    def rotate_landmarks(landmarks, angle_deg):
+        """Rotate around Z-axis (XY plane)"""
+        # Convert to numeric format first
+        landmarks = GestureAugmenter._ensure_numeric_format(landmarks)
+        angle_rad = np.radians(angle_deg)
+        rot_matrix = np.array([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ])
+        landmarks = landmarks.reshape(-1, 3)
+        xy_rotated = np.dot(landmarks[:, :2], rot_matrix)
+        return np.hstack((xy_rotated, landmarks[:, 2:])).flatten()
+
+    @staticmethod
+    def mirror_landmarks(landmarks):
+        """Flip along X-axis"""
+        # Convert to numeric format first
+        landmarks = GestureAugmenter._ensure_numeric_format(landmarks)
+        landmarks = landmarks.reshape(-1, 3)
+        landmarks[:, 0] = -landmarks[:, 0]
+        return landmarks.flatten()
+
+    @staticmethod
+    def time_warp(landmarks):
+        """Simulate frame lag by jittering a few random joints more than others"""
+        # Convert to numeric format first
+        landmarks = GestureAugmenter._ensure_numeric_format(landmarks)
+        landmarks = landmarks.reshape(-1, 3)
+        indices = random.sample(range(len(landmarks)), k=min(5, len(landmarks)))
+        for i in indices:
+            landmarks[i] += np.random.normal(0, 0.02, size=3)
+        return landmarks.flatten()
+
+    @staticmethod
+    def augment_sample(sample):
+        """Apply multiple augmentations to one sample"""
+        augmented = []
+
+        # Convert the sample to numeric format first
+        sample = GestureAugmenter._ensure_numeric_format(sample)
+        
+        # Apply center normalization
+        sample = GestureAugmenter.center_landmarks(sample)
+        augmented.append(sample.tolist())
+
+        for _ in range(19):
+            aug = sample.copy()
+
+            # Apply random augmentation combinations
+            if random.random() < 0.5:
+                aug = GestureAugmenter.rotate_landmarks(aug, angle_deg=random.uniform(-25, 25))
+            if random.random() < 0.5:
+                aug = GestureAugmenter.mirror_landmarks(aug)
+            if random.random() < 0.5:
+                aug = GestureAugmenter.time_warp(aug)
+
+            # Add noise and scale
+            jitter = np.random.normal(0, 0.01, size=len(aug))
+            scale = np.random.uniform(0.9, 1.1)
+            aug = (np.array(aug) + jitter) * scale
+
+            augmented.append(aug.tolist())
+        
+        return augmented
+
+    @staticmethod
+    def generate_augmented_samples(samples, target_count=100):
+        """Generate a specific number of samples from base samples"""
+        all_augmented = []
+        for sample in samples:
+            all_augmented.extend(GestureAugmenter.augment_sample(sample))
+
+        # Trim/pad to exactly the target count
+        if len(all_augmented) > target_count:
+            all_augmented = all_augmented[:target_count]
+        elif len(all_augmented) < target_count:
+            # Make sure we have at least one sample before trying to pad
+            if all_augmented:
+                all_augmented += random.choices(all_augmented, k=target_count - len(all_augmented))
+            
+        return all_augmented
 
 
 class GestureRecordDialog(QDialog):
@@ -166,31 +279,38 @@ class GestureRecordDialog(QDialog):
         # Get current frame from camera manager
         ret, frame = self.camera_manager.get_frame()
         
-        if not ret:
+        if not ret or frame is None:
             logger.error("Failed to get frame from camera")
             return
             
         # Process with gesture detector if available
+        processed_frame = frame.copy()
         if self.gesture_detector and self.recording:
             try:
-                # Use the internal process methods to get landmarks without triggering gesture events
+                # Process the frame to get landmarks
                 if self.gesture_detector.detection_engine == "mediapipe":
-                    # Process frame with MediaPipe to get hand landmarks
+                    # Use the direct processing method for display only
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     results = self.gesture_detector.hands.process(rgb_frame)
                     
                     if results.multi_hand_landmarks:
                         hand_landmarks = results.multi_hand_landmarks[0]  # Use first hand
                         
-                        # Extract landmarks into a more usable format
+                        # Extract landmarks into a more usable format - without modifying MediaPipe objects
                         landmark_list = []
                         for lm in hand_landmarks.landmark:
-                            landmark_list.append({'x': lm.x, 'y': lm.y, 'z': lm.z})
+                            landmark_list.append({
+                                'x': lm.x,
+                                'y': lm.y,
+                                'z': lm.z
+                            })
                         
+                        # Add to landmarks collection
                         self.landmarks.append(landmark_list)
                         
-                        # Update confidence (using distance from average position as a proxy for confidence)
-                        confidence = 0.75  # Default reasonable confidence
+                        # Calculate confidence based on visibility of landmarks
+                        confidence = sum(1.0 for lm in landmark_list if lm['x'] > 0 and lm['y'] > 0) / len(landmark_list)
+                        confidence = min(1.0, max(0.0, confidence))
                         
                         # Keep track of the best landmarks
                         if not self.best_landmarks or confidence > self.best_confidence:
@@ -198,10 +318,9 @@ class GestureRecordDialog(QDialog):
                             self.best_landmarks = landmark_list
                             self.confidence_label.setText(f"Confidence: {confidence:.1%}")
                         
-                        # Draw landmarks on frame
-                        h, w, _ = frame.shape
+                        # Draw landmarks on the frame (using MediaPipe's drawing utilities)
                         self.gesture_detector.mp_drawing.draw_landmarks(
-                            frame,
+                            processed_frame,
                             hand_landmarks,
                             self.gesture_detector.mp_hands.HAND_CONNECTIONS,
                             self.gesture_detector.mp_drawing_styles.get_default_hand_landmarks_style(),
@@ -209,12 +328,12 @@ class GestureRecordDialog(QDialog):
                         )
                 
             except Exception as e:
-                logger.error(f"Error in gesture detection: {e}")
+                logger.error(f"Error in gesture detection during recording: {e}")
         
         # Convert frame to QPixmap for display
-        h, w, ch = frame.shape
+        h, w, ch = processed_frame.shape
         bytes_per_line = ch * w
-        qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        qt_image = QImage(processed_frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
         self.preview_label.setPixmap(QPixmap.fromImage(qt_image).scaled(
             self.preview_label.width(), self.preview_label.height(),
             Qt.KeepAspectRatio, Qt.SmoothTransformation
@@ -440,6 +559,12 @@ class GestureTrainer(QWidget):
         self.record_sample_button.clicked.connect(self._record_sample)
         self.record_sample_button.setEnabled(False)
         sample_buttons_layout.addWidget(self.record_sample_button)
+        
+        self.quick_sample_button = QPushButton("Quick 5→100 Samples")
+        self.quick_sample_button.setToolTip("Record just 5 samples and automatically generate 100 total variations")
+        self.quick_sample_button.clicked.connect(self._quick_sample_with_augmentation)
+        self.quick_sample_button.setEnabled(False)
+        sample_buttons_layout.addWidget(self.quick_sample_button)
         
         self.remove_samples_button = QPushButton("Remove All Samples")
         self.remove_samples_button.clicked.connect(self._remove_all_samples)
@@ -713,8 +838,13 @@ class GestureTrainer(QWidget):
                 success = self.gesture_classifier.add_gesture_sample(gesture_name, landmarks)
                 
                 if success:
+                    # Augment the sample
+                    augmented_samples = GestureAugmenter.generate_augmented_samples([landmarks])
+                    for aug_sample in augmented_samples:
+                        self.gesture_classifier.add_gesture_sample(gesture_name, aug_sample)
+                    
                     # Update local tracking
-                    self.gestures[gesture_name]["sample_count"] = sample_count + 1
+                    self.gestures[gesture_name]["sample_count"] = sample_count + len(augmented_samples)
                     self.gestures[gesture_name]["trained"] = False
                     
                     # Update the UI
@@ -723,7 +853,7 @@ class GestureTrainer(QWidget):
                     QMessageBox.information(
                         self,
                         "Sample Recorded",
-                        f"Sample {sample_number} for '{gesture_name}' has been recorded."
+                        f"Sample {sample_number} for '{gesture_name}' has been recorded and augmented."
                     )
                 else:
                     QMessageBox.warning(
@@ -737,6 +867,79 @@ class GestureTrainer(QWidget):
                     "Classifier Unavailable",
                     "Gesture classifier is not available, cannot save sample."
                 )
+    
+    @pyqtSlot()
+    def _quick_sample_with_augmentation(self):
+        """Record 5 samples and automatically generate 100 total variations"""
+        current_item = self.gesture_list.currentItem()
+        
+        if not current_item:
+            return
+        
+        gesture_name = current_item.text()
+        
+        if gesture_name not in self.gestures:
+            return
+        
+        # Get the current number of samples
+        sample_count = self.gestures[gesture_name].get("sample_count", 0)
+        
+        # Show the recording dialog for 5 samples
+        for sample_number in range(sample_count + 1, sample_count + 6):
+            dialog = GestureRecordDialog(
+                gesture_name, 
+                sample_number, 
+                self.camera_manager, 
+                self.gesture_detector,
+                self
+            )
+            
+            if dialog.exec_() == QDialog.Accepted:
+                # Get the best landmarks from the recording
+                landmarks = dialog.get_best_landmarks()
+                
+                if not landmarks:
+                    QMessageBox.warning(
+                        self,
+                        "Record Failed",
+                        "No valid hand landmarks were detected during recording."
+                    )
+                    return
+                
+                # Add the sample to the classifier
+                if self.gesture_classifier:
+                    success = self.gesture_classifier.add_gesture_sample(gesture_name, landmarks)
+                    
+                    if success:
+                        # Augment the sample
+                        augmented_samples = GestureAugmenter.generate_augmented_samples([landmarks])
+                        for aug_sample in augmented_samples:
+                            self.gesture_classifier.add_gesture_sample(gesture_name, aug_sample)
+                        
+                        # Update local tracking
+                        self.gestures[gesture_name]["sample_count"] = sample_count + len(augmented_samples)
+                        self.gestures[gesture_name]["trained"] = False
+                        
+                        # Update the UI
+                        self._update_gesture_details(current_item)
+                        
+                        QMessageBox.information(
+                            self,
+                            "Sample Recorded",
+                            f"Sample {sample_number} for '{gesture_name}' has been recorded and augmented."
+                        )
+                    else:
+                        QMessageBox.warning(
+                            self,
+                            "Record Failed",
+                            f"Failed to save sample for gesture '{gesture_name}'."
+                        )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Classifier Unavailable",
+                        "Gesture classifier is not available, cannot save sample."
+                    )
     
     @pyqtSlot()
     def _remove_all_samples(self):
@@ -903,8 +1106,12 @@ class GestureTrainer(QWidget):
                     QMessageBox.information(
                         self,
                         "Export Successful",
-                        f"Gestures have been exported to {file_path}"
+                        f"Gestures have been exported to {file_path}\n\nTotal gestures exported: {len(gesture_data)}"
                     )
+                    
+                    # Log what was exported
+                    gesture_names = list(gesture_data.keys())
+                    logger.info(f"Exported gestures: {gesture_names}")
                 else:
                     QMessageBox.warning(
                         self,
@@ -952,6 +1159,18 @@ class GestureTrainer(QWidget):
                     )
                     return
                 
+                # Show import details
+                details = f"Found {len(imported_gestures)} gestures in the file:\n"
+                for name, data in imported_gestures.items():
+                    sample_count = len(data.get("samples", []))
+                    details += f"- {name}: {sample_count} samples\n"
+                
+                QMessageBox.information(
+                    self,
+                    "Import Details",
+                    details
+                )
+                
                 # Load existing gesture data
                 existing_data = self.gesture_classifier._load_gesture_data()
                 
@@ -981,14 +1200,19 @@ class GestureTrainer(QWidget):
                                     new_name = f"{base_name} (imported {counter})"
                                 
                                 existing_data[new_name] = data
+                                logger.info(f"Renamed imported gesture '{name}' to '{new_name}'")
                             else:
                                 existing_data[name] = data
+                        
+                        logger.info(f"Merged {len(imported_gestures)} imported gestures with existing data")
                     else:
                         # Replace gestures
                         existing_data = imported_gestures
+                        logger.info(f"Replaced existing gestures with {len(imported_gestures)} imported gestures")
                 else:
                     # No existing gestures, just use the imported ones
                     existing_data = imported_gestures
+                    logger.info(f"Imported {len(imported_gestures)} gestures to empty dataset")
                 
                 # Save the merged/replaced gesture data
                 self.gesture_classifier._save_gesture_data(existing_data)
@@ -1078,6 +1302,7 @@ class GestureTrainer(QWidget):
             self.sample_count_label.setText("No samples")
             self.preview_label.setText("Select a gesture to view samples")
             self.record_sample_button.setEnabled(False)
+            self.quick_sample_button.setEnabled(False)
             self.remove_samples_button.setEnabled(False)
             self.rename_gesture_button.setEnabled(False)
             self.delete_gesture_button.setEnabled(False)
@@ -1106,6 +1331,7 @@ class GestureTrainer(QWidget):
         
         # Enable/disable buttons
         self.record_sample_button.setEnabled(True)
+        self.quick_sample_button.setEnabled(True)
         self.remove_samples_button.setEnabled(sample_count > 0)
         self.rename_gesture_button.setEnabled(True)
         self.delete_gesture_button.setEnabled(True)

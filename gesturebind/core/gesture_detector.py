@@ -278,31 +278,47 @@ class GestureDetector:
             self.landmark_history.pop(0)
             
         # Apply exponential moving average
-        smoothed = landmarks
+        if self.prev_landmarks is None:
+            self.prev_landmarks = landmarks
+            return landmarks
         
-        if self.prev_landmarks is not None:
-            # Create a copy to avoid modifying original landmarks
-            smoothed = []
-            for i, lm in enumerate(landmarks):
-                if i < len(self.prev_landmarks):
-                    # Smooth x, y, z coordinates
-                    smoothed_x = alpha * lm.x + (1 - alpha) * self.prev_landmarks[i].x
-                    smoothed_y = alpha * lm.y + (1 - alpha) * self.prev_landmarks[i].y
-                    smoothed_z = alpha * lm.z + (1 - alpha) * self.prev_landmarks[i].z
-                    
-                    # Create new landmark with smoothed values
-                    smoothed_lm = type(lm)()
-                    smoothed_lm.x = smoothed_x
-                    smoothed_lm.y = smoothed_y
-                    smoothed_lm.z = smoothed_z
-                    smoothed.append(smoothed_lm)
-                else:
-                    smoothed.append(lm)
-                    
-        # Update previous landmarks
-        self.prev_landmarks = smoothed
-            
-        return smoothed
+        # Instead of modifying landmarks in place (which causes errors), 
+        # create a list to store smoothed values
+        
+        smoothed_values = []
+        
+        for i, lm in enumerate(landmarks):
+            if i < len(self.prev_landmarks):
+                # Get previous landmark values
+                prev_x = self.prev_landmarks[i].x
+                prev_y = self.prev_landmarks[i].y
+                prev_z = self.prev_landmarks[i].z
+                
+                # Calculate smoothed values
+                smoothed_x = alpha * lm.x + (1 - alpha) * prev_x
+                smoothed_y = alpha * lm.y + (1 - alpha) * prev_y
+                smoothed_z = alpha * lm.z + (1 - alpha) * prev_z
+                
+                # Store values in a new dictionary
+                smoothed_values.append({
+                    'x': smoothed_x,
+                    'y': smoothed_y,
+                    'z': smoothed_z
+                })
+            else:
+                # If we don't have previous data, just use current values
+                smoothed_values.append({
+                    'x': lm.x,
+                    'y': lm.y,
+                    'z': lm.z
+                })
+        
+        # Update previous landmarks for next frame
+        self.prev_landmarks = landmarks
+        
+        # Return the original landmarks (we'll use smoothed_values elsewhere)
+        self._smoothed_values = smoothed_values
+        return landmarks
     
     def _process_with_mediapipe(self, frame):
         """
@@ -340,9 +356,11 @@ class GestureDetector:
                     handedness = handedness_info.classification[0].label
                     self.current_handedness = handedness
                 
-                # Apply smoothing
+                # Apply smoothing - but NEVER modify the MediaPipe landmark objects directly
+                smoothed_values = None
                 if self.landmark_smoothing:
-                    hand_landmarks.landmark = self._smooth_landmarks(hand_landmarks.landmark)
+                    self._smooth_landmarks(hand_landmarks.landmark)
+                    # The smoothed values are now stored in self._smoothed_values if needed
                 
                 # Draw hand landmarks on the frame
                 self.mp_drawing.draw_landmarks(
@@ -555,11 +573,8 @@ class GestureDetector:
             return None, 0.0
             
         try:
-            # Extract landmark features
-            landmark_features = []
-            for landmark in landmarks.landmark:
-                # Normalize coordinates (x, y, z)
-                landmark_features.extend([landmark.x, landmark.y, landmark.z])
+            # Use the classifier's own feature extraction for consistency with training
+            features = self.classifier.extract_features_from_landmarks(landmarks)
             
             # Add handedness as a feature (0 for left, 1 for right)
             hand_value = 0.5  # default if unknown
@@ -569,14 +584,15 @@ class GestureDetector:
                 elif handedness.lower() == "right":
                     hand_value = 1.0
             
-            # Add handedness to features
-            landmark_features.append(hand_value)
+            # Add handedness to features if needed
+            # features = np.append(features, hand_value)  # Uncomment if handedness should be a feature
             
-            # Convert to numpy array
-            features = np.array(landmark_features, dtype=np.float32)
+            # Classify the landmarks - use the correct method name: classify_gesture, not classify
+            gesture_name, confidence = self.classifier.classify_gesture(features)
             
-            # Classify the landmarks
-            gesture_name, confidence = self.classifier.classify(features)
+            # Log successful classifications for debugging
+            if gesture_name and confidence > self.confidence_threshold:
+                logger.debug(f"Classified gesture: {gesture_name} with confidence {confidence:.2f}")
             
             return gesture_name, confidence
             

@@ -206,8 +206,18 @@ class MainWindow(QMainWindow):
         """Initialize the training tab content"""
         layout = QVBoxLayout(self.training_tab)
         
-        # Create and add the gesture trainer component
-        self.gesture_trainer = GestureTrainer(self.config_manager)
+        # Create gesture manager if it doesn't exist yet
+        if not self.gesture_manager:
+            self._init_gesture_manager()
+            
+        # Create and add the gesture trainer component with camera access
+        if self.gesture_manager and hasattr(self.gesture_manager, 'camera_manager'):
+            # Pass camera manager to enable camera access in the training interface
+            self.gesture_trainer = GestureTrainer(self.config_manager, self.gesture_manager.camera_manager)
+        else:
+            # Fallback without camera
+            self.gesture_trainer = GestureTrainer(self.config_manager)
+            
         layout.addWidget(self.gesture_trainer)
         
         # Connect the model trained signal
