@@ -120,6 +120,18 @@ class ActionMapper:
             logger.warning(f"Profile '{profile_name}' not found, keeping current profile")
             return False
     
+    def set_profile(self, profile_name):
+        """
+        Set the active gesture mapping profile (alias for set_active_profile).
+        
+        Args:
+            profile_name (str): Name of the profile to activate
+            
+        Returns:
+            bool: True if profile was found and set, False otherwise
+        """
+        return self.set_active_profile(profile_name)
+    
     def get_action_for_gesture(self, gesture_name):
         """
         Get the configured action for a detected gesture.

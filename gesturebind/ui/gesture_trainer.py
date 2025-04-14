@@ -8,20 +8,37 @@ import os
 import json
 import logging
 import numpy as np
+import cv2
+import datetime
+from pathlib import Path
+
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                            QPushButton, QListWidget, QMessageBox,
+                            QPushButton, QListWidget, QListWidgetItem, QMessageBox,
                             QInputDialog, QProgressBar, QGroupBox,
                             QFormLayout, QSpinBox, QComboBox, QDialog,
-                            QTextEdit, QSplitter, QFileDialog)
+                            QSplitter, QFileDialog, QApplication)
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QImage
 
+# Import the gesture detector if available
+try:
+    from core.gesture_detector import GestureDetector
+except ImportError:
+    GestureDetector = None
+
+# Import the gesture classifier if available
+try:
+    from models.gesture_classifier import GestureClassifier
+except ImportError:
+    GestureClassifier = None
+
 logger = logging.getLogger(__name__)
+
 
 class GestureRecordDialog(QDialog):
     """Dialog for recording a single gesture sample"""
     
-    def __init__(self, gesture_name, sample_number, parent=None):
+    def __init__(self, gesture_name, sample_number, camera_manager=None, gesture_detector=None, parent=None):
         super().__init__(parent)
         
         self.gesture_name = gesture_name
@@ -31,6 +48,11 @@ class GestureRecordDialog(QDialog):
         self.recording_time = 0
         self.max_recording_time = 5  # Maximum recording time in seconds
         self.frames = []
+        self.landmarks = []
+        self.camera_manager = camera_manager
+        self.gesture_detector = gesture_detector
+        self.best_landmarks = None
+        self.best_confidence = 0.0
         
         self.setWindowTitle(f"Record Gesture: {gesture_name}")
         self.setMinimumSize(600, 400)
@@ -60,6 +82,7 @@ class GestureRecordDialog(QDialog):
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(240)
+        self.preview_label.setStyleSheet("background-color: #000000;")
         layout.addWidget(self.preview_label)
         
         # Progress bar for recording
@@ -67,6 +90,11 @@ class GestureRecordDialog(QDialog):
         self.progress_bar.setRange(0, self.max_recording_time * 10)  # 10 ticks per second
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
+        
+        # Confidence indicator
+        self.confidence_label = QLabel("Confidence: 0%")
+        self.confidence_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.confidence_label)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -95,6 +123,15 @@ class GestureRecordDialog(QDialog):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_countdown)
         self.timer.start(1000)  # 1 second interval
+        
+        # Start video preview
+        if self.camera_manager:
+            self.camera_preview_timer = QTimer(self)
+            self.camera_preview_timer.timeout.connect(self.update_preview)
+            self.camera_preview_timer.start(33)  # ~30 FPS
+        else:
+            # Show placeholder if no camera manager
+            self.show_placeholder_preview()
     
     def update_countdown(self):
         """Update the countdown timer"""
@@ -113,26 +150,106 @@ class GestureRecordDialog(QDialog):
         self.recording = True
         self.recording_time = 0
         self.frames = []
+        self.landmarks = []
+        self.best_landmarks = None
+        self.best_confidence = 0.0
         
         self.record_timer = QTimer(self)
         self.record_timer.timeout.connect(self.update_recording)
         self.record_timer.start(100)  # 100ms interval (10 ticks per second)
+    
+    def update_preview(self):
+        """Update the camera preview"""
+        if not self.camera_manager:
+            return
         
-        # In a real implementation, we would start capturing from the camera here
+        # Get current frame from camera manager
+        ret, frame = self.camera_manager.get_frame()
+        
+        if not ret:
+            logger.error("Failed to get frame from camera")
+            return
+            
+        # Process with gesture detector if available
+        if self.gesture_detector and self.recording:
+            try:
+                # Use the internal process methods to get landmarks without triggering gesture events
+                if self.gesture_detector.detection_engine == "mediapipe":
+                    # Process frame with MediaPipe to get hand landmarks
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = self.gesture_detector.hands.process(rgb_frame)
+                    
+                    if results.multi_hand_landmarks:
+                        hand_landmarks = results.multi_hand_landmarks[0]  # Use first hand
+                        
+                        # Extract landmarks into a more usable format
+                        landmark_list = []
+                        for lm in hand_landmarks.landmark:
+                            landmark_list.append({'x': lm.x, 'y': lm.y, 'z': lm.z})
+                        
+                        self.landmarks.append(landmark_list)
+                        
+                        # Update confidence (using distance from average position as a proxy for confidence)
+                        confidence = 0.75  # Default reasonable confidence
+                        
+                        # Keep track of the best landmarks
+                        if not self.best_landmarks or confidence > self.best_confidence:
+                            self.best_confidence = confidence
+                            self.best_landmarks = landmark_list
+                            self.confidence_label.setText(f"Confidence: {confidence:.1%}")
+                        
+                        # Draw landmarks on frame
+                        h, w, _ = frame.shape
+                        self.gesture_detector.mp_drawing.draw_landmarks(
+                            frame,
+                            hand_landmarks,
+                            self.gesture_detector.mp_hands.HAND_CONNECTIONS,
+                            self.gesture_detector.mp_drawing_styles.get_default_hand_landmarks_style(),
+                            self.gesture_detector.mp_drawing_styles.get_default_hand_connections_style()
+                        )
+                
+            except Exception as e:
+                logger.error(f"Error in gesture detection: {e}")
+        
+        # Convert frame to QPixmap for display
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        self.preview_label.setPixmap(QPixmap.fromImage(qt_image).scaled(
+            self.preview_label.width(), self.preview_label.height(),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
+        ))
+    
+    def show_placeholder_preview(self):
+        """Show a placeholder preview when no camera is available"""
+        # Create a placeholder image
+        placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.putText(
+            placeholder,
+            "No Camera Available",
+            (40, 120),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2
+        )
+        
+        # Convert to QPixmap
+        h, w, ch = placeholder.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(placeholder.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        self.preview_label.setPixmap(QPixmap.fromImage(qt_image))
     
     def update_recording(self):
         """Update the recording progress"""
         self.recording_time += 0.1
         self.progress_bar.setValue(int(self.recording_time * 10))
         
-        # Capture a frame
-        # In a real implementation, this would capture from the camera
-        # For demonstration, we'll simulate it
-        # self.frames.append(current_frame)
-        
-        # Update the preview
-        # In a real implementation, this would show the current camera frame
-        # For demonstration, we'll use a placeholder
+        # Get the current frame if camera is available
+        if self.camera_manager:
+            ret, frame = self.camera_manager.get_frame()
+            if ret:
+                self.frames.append(frame)
         
         # Check if recording is complete
         if self.recording_time >= self.max_recording_time:
@@ -141,7 +258,8 @@ class GestureRecordDialog(QDialog):
     def finish_recording(self):
         """Finish recording the gesture"""
         self.recording = False
-        self.record_timer.stop()
+        if hasattr(self, 'record_timer'):
+            self.record_timer.stop()
         
         self.countdown_label.setText("Recording complete!")
         self.instruction_label.setText("Review the recorded gesture and accept or retry.")
@@ -155,9 +273,27 @@ class GestureRecordDialog(QDialog):
         self.done_button.setEnabled(False)
         self.start_countdown()
     
+    def get_best_landmarks(self):
+        """Get the best landmarks from the recording"""
+        return self.best_landmarks
+    
     def get_recorded_frames(self):
         """Get the recorded frames"""
         return self.frames
+    
+    def closeEvent(self, event):
+        """Handle window close event"""
+        # Stop all timers
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
+            
+        if hasattr(self, 'record_timer') and self.record_timer.isActive():
+            self.record_timer.stop()
+            
+        if hasattr(self, 'camera_preview_timer') and self.camera_preview_timer.isActive():
+            self.camera_preview_timer.stop()
+            
+        event.accept()
 
 
 class GestureTrainer(QWidget):
@@ -182,8 +318,26 @@ class GestureTrainer(QWidget):
         self.config = config_manager.load_config()
         self.camera_manager = camera_manager
         
+        # Create gesture detector if possible
+        self.gesture_detector = None
+        if GestureDetector and camera_manager:
+            try:
+                self.gesture_detector = GestureDetector(self.config)
+                logger.info("Created gesture detector for training interface")
+            except Exception as e:
+                logger.error(f"Failed to create gesture detector: {e}")
+                
+        # Create gesture classifier
+        self.gesture_classifier = None
+        if GestureClassifier:
+            try:
+                self.gesture_classifier = GestureClassifier(self.config)
+                logger.info("Created gesture classifier for training interface")
+            except Exception as e:
+                logger.error(f"Failed to create gesture classifier: {e}")
+        
         # Data storage
-        self.gestures = {}  # Dict of gesture_name -> list of samples
+        self.gestures = {}  # Dict of gesture_name -> dict of info and samples
         self.data_path = os.path.expanduser(
             self.config.get("app", {}).get("save_user_data_path", "~/.gesturebind/data")
         )
@@ -317,6 +471,12 @@ class GestureTrainer(QWidget):
         self.batch_size_spinner.setValue(16)
         training_layout.addRow("Batch size:", self.batch_size_spinner)
         
+        # Model type selection
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItem("K-Nearest Neighbors", "knn")
+        self.model_type_combo.addItem("Neural Network", "nn")
+        training_layout.addRow("Model type:", self.model_type_combo)
+        
         right_layout.addWidget(training_group)
         
         # Training controls
@@ -359,27 +519,31 @@ class GestureTrainer(QWidget):
     
     def _load_existing_gestures(self):
         """Load existing gestures from the data directory"""
-        profile_dir = os.path.join(self.data_path, self.current_profile)
-        
-        if not os.path.exists(profile_dir):
-            os.makedirs(profile_dir, exist_ok=True)
-            logger.info(f"Created new profile directory: {profile_dir}")
+        if not self.gesture_classifier:
+            logger.warning("Cannot load gestures - no gesture classifier available")
             return
-        
-        try:
-            # Load gestures from the profile directory
-            gestures_file = os.path.join(profile_dir, "gestures.json")
             
-            if os.path.exists(gestures_file):
-                with open(gestures_file, 'r') as f:
-                    self.gestures = json.load(f)
+        try:
+            # Get gestures from the classifier
+            gesture_info = self.gesture_classifier.get_all_gestures()
+            
+            if gesture_info:
+                # Convert from classifier format to our format
+                for gesture_name, info in gesture_info.items():
+                    self.gestures[gesture_name] = {
+                        "samples": [],  # We don't load actual samples in the UI
+                        "sample_count": info.get("sample_count", 0),
+                        "trained": info.get("trained", False)
+                    }
                 
                 # Populate the gesture list
                 self.gesture_list.clear()
                 for gesture_name in self.gestures.keys():
                     self.gesture_list.addItem(gesture_name)
                 
-                logger.info(f"Loaded {len(self.gestures)} gestures from profile '{self.current_profile}'")
+                logger.info(f"Loaded {len(self.gestures)} gestures from classifier")
+            else:
+                logger.info("No existing gestures found")
             
         except Exception as e:
             logger.error(f"Error loading gestures: {e}")
@@ -390,29 +554,10 @@ class GestureTrainer(QWidget):
             )
     
     def _save_gestures(self):
-        """Save the current gestures to the data directory"""
-        profile_dir = os.path.join(self.data_path, self.current_profile)
-        os.makedirs(profile_dir, exist_ok=True)
-        
-        try:
-            gestures_file = os.path.join(profile_dir, "gestures.json")
-            
-            with open(gestures_file, 'w') as f:
-                json.dump(self.gestures, f, indent=2)
-            
-            logger.info(f"Saved {len(self.gestures)} gestures to profile '{self.current_profile}'")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error saving gestures: {e}")
-            QMessageBox.warning(
-                self,
-                "Save Error",
-                f"Failed to save gestures: {str(e)}"
-            )
-            
-            return False
+        """Save the current gestures configuration"""
+        # We don't need to save anything here as the actual gesture data
+        # is saved by the classifier when samples are added
+        return True
     
     @pyqtSlot()
     def _add_gesture(self):
@@ -439,6 +584,7 @@ class GestureTrainer(QWidget):
             # Add to gestures dictionary
             self.gestures[gesture_name] = {
                 "samples": [],
+                "sample_count": 0,
                 "trained": False
             }
             
@@ -446,9 +592,6 @@ class GestureTrainer(QWidget):
             items = self.gesture_list.findItems(gesture_name, Qt.MatchExactly)
             if items:
                 self.gesture_list.setCurrentItem(items[0])
-            
-            # Save the gestures
-            self._save_gestures()
     
     @pyqtSlot()
     def _rename_gesture(self):
@@ -477,15 +620,15 @@ class GestureTrainer(QWidget):
                 )
                 return
             
-            # Update the gesture in the dictionary
-            self.gestures[new_name] = self.gestures[old_name]
-            del self.gestures[old_name]
+            # Not implemented yet - we'd need to rename in the classifier data
+            QMessageBox.information(
+                self,
+                "Not Implemented",
+                "Renaming gestures is not yet implemented."
+            )
             
-            # Update the list item
+            # Update the list item just for UI purposes
             current_item.setText(new_name)
-            
-            # Save the gestures
-            self._save_gestures()
     
     @pyqtSlot()
     def _delete_gesture(self):
@@ -505,6 +648,17 @@ class GestureTrainer(QWidget):
         )
         
         if confirm == QMessageBox.Yes:
+            # Delete from classifier
+            if self.gesture_classifier:
+                success = self.gesture_classifier.delete_gesture(gesture_name)
+                if not success:
+                    QMessageBox.warning(
+                        self,
+                        "Delete Failed",
+                        f"Failed to delete gesture '{gesture_name}' from classifier data."
+                    )
+                    return
+            
             # Remove from the dictionary
             if gesture_name in self.gestures:
                 del self.gestures[gesture_name]
@@ -515,9 +669,6 @@ class GestureTrainer(QWidget):
             
             # Update UI
             self._update_gesture_details(None)
-            
-            # Save the gestures
-            self._save_gestures()
     
     @pyqtSlot()
     def _record_sample(self):
@@ -533,36 +684,59 @@ class GestureTrainer(QWidget):
             return
         
         # Get the current number of samples
-        samples = self.gestures[gesture_name].get("samples", [])
-        sample_number = len(samples) + 1
+        sample_count = self.gestures[gesture_name].get("sample_count", 0)
+        sample_number = sample_count + 1
         
         # Show the recording dialog
-        dialog = GestureRecordDialog(gesture_name, sample_number, self)
+        dialog = GestureRecordDialog(
+            gesture_name, 
+            sample_number, 
+            self.camera_manager, 
+            self.gesture_detector,
+            self
+        )
         
         if dialog.exec_() == QDialog.Accepted:
-            # In a real implementation, we would get the frames from the dialog and save them
-            frames = dialog.get_recorded_frames()
+            # Get the best landmarks from the recording
+            landmarks = dialog.get_best_landmarks()
             
-            # Since this is a simplified version, we'll add a placeholder sample
-            self.gestures[gesture_name]["samples"].append({
-                "timestamp": "2025-04-13T12:00:00",
-                "data": "placeholder_data_for_sample"
-            })
+            if not landmarks:
+                QMessageBox.warning(
+                    self,
+                    "Record Failed",
+                    "No valid hand landmarks were detected during recording."
+                )
+                return
             
-            # Update the UI
-            self._update_gesture_details(current_item)
-            
-            # Mark as not trained
-            self.gestures[gesture_name]["trained"] = False
-            
-            # Save the gestures
-            self._save_gestures()
-            
-            QMessageBox.information(
-                self,
-                "Sample Recorded",
-                f"Sample {sample_number} for '{gesture_name}' has been recorded."
-            )
+            # Add the sample to the classifier
+            if self.gesture_classifier:
+                success = self.gesture_classifier.add_gesture_sample(gesture_name, landmarks)
+                
+                if success:
+                    # Update local tracking
+                    self.gestures[gesture_name]["sample_count"] = sample_count + 1
+                    self.gestures[gesture_name]["trained"] = False
+                    
+                    # Update the UI
+                    self._update_gesture_details(current_item)
+                    
+                    QMessageBox.information(
+                        self,
+                        "Sample Recorded",
+                        f"Sample {sample_number} for '{gesture_name}' has been recorded."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Record Failed",
+                        f"Failed to save sample for gesture '{gesture_name}'."
+                    )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Classifier Unavailable",
+                    "Gesture classifier is not available, cannot save sample."
+                )
     
     @pyqtSlot()
     def _remove_all_samples(self):
@@ -585,17 +759,18 @@ class GestureTrainer(QWidget):
         )
         
         if confirm == QMessageBox.Yes:
-            # Clear samples
-            self.gestures[gesture_name]["samples"] = []
+            # Not implemented yet - we'd need to delete samples from classifier data
+            QMessageBox.information(
+                self,
+                "Not Implemented",
+                "Removing samples is not yet implemented."
+            )
             
-            # Mark as not trained
+            # Mark as not trained for UI purposes
             self.gestures[gesture_name]["trained"] = False
             
             # Update UI
             self._update_gesture_details(current_item)
-            
-            # Save the gestures
-            self._save_gestures()
     
     @pyqtSlot()
     def _train_model(self):
@@ -605,9 +780,9 @@ class GestureTrainer(QWidget):
         total_samples = 0
         
         for gesture_name, gesture_data in self.gestures.items():
-            if len(gesture_data.get("samples", [])) > 0:
+            if gesture_data.get("sample_count", 0) > 0:
                 trainable_gestures += 1
-                total_samples += len(gesture_data.get("samples", []))
+                total_samples += gesture_data.get("sample_count", 0)
         
         if trainable_gestures < 2:
             QMessageBox.warning(
@@ -627,49 +802,75 @@ class GestureTrainer(QWidget):
         # Get training parameters
         epochs = self.epochs_spinner.value()
         batch_size = self.batch_size_spinner.value()
+        model_type_idx = self.model_type_combo.currentIndex()
+        model_type = self.model_type_combo.itemData(model_type_idx)
+        
+        # Set model type in classifier if available
+        if self.gesture_classifier:
+            self.gesture_classifier.model_type = model_type
         
         # Start the training process
         self.training_status.setText("Training in progress...")
         self.training_progress.setValue(0)
         self.train_button.setEnabled(False)
         
-        # In a real implementation, this would be done in a separate thread
-        # For demonstration, we'll simulate the training process
-        total_steps = epochs
-        
-        for i in range(total_steps + 1):
-            # Simulate training progress
-            progress = int((i / total_steps) * 100)
-            self.training_progress.setValue(progress)
-            self.training_status.setText(f"Training in progress... {progress}%")
-            
-            # Process events to keep UI responsive
-            QApplication.processEvents()
-            
-            # Simulate some delay
-            import time
-            time.sleep(0.01)
-        
-        # Mark all gestures as trained
-        for gesture_name in self.gestures:
-            if len(self.gestures[gesture_name].get("samples", [])) > 0:
-                self.gestures[gesture_name]["trained"] = True
-        
-        # Update the UI
-        self.train_button.setEnabled(True)
-        self.training_status.setText(f"Training complete! Model accuracy: 92.5%")
-        
-        # Save the gestures
-        self._save_gestures()
-        
-        # Emit signal that model has been trained
-        self.model_trained.emit(self.current_profile)
-        
-        QMessageBox.information(
-            self,
-            "Training Complete",
-            "The gesture recognition model has been trained successfully."
-        )
+        # Train the model
+        success = False
+        if self.gesture_classifier:
+            try:
+                # Process events to keep UI responsive
+                QApplication.processEvents()
+                
+                # Perform the actual training
+                success = self.gesture_classifier.train_model()
+                
+                # Show final progress
+                self.training_progress.setValue(100)
+                
+                if success:
+                    # Mark all gestures with samples as trained
+                    for gesture_name in self.gestures:
+                        if self.gestures[gesture_name].get("sample_count", 0) > 0:
+                            self.gestures[gesture_name]["trained"] = True
+                    
+                    # Update the UI
+                    self.train_button.setEnabled(True)
+                    self.training_status.setText(f"Training complete! Model type: {model_type}")
+                    
+                    # Emit signal that model has been trained
+                    self.model_trained.emit(self.current_profile)
+                    
+                    QMessageBox.information(
+                        self,
+                        "Training Complete",
+                        "The gesture recognition model has been trained successfully."
+                    )
+                else:
+                    self.training_status.setText("Training failed!")
+                    QMessageBox.warning(
+                        self,
+                        "Training Failed",
+                        "Failed to train the gesture recognition model."
+                    )
+                    self.train_button.setEnabled(True)
+                    
+            except Exception as e:
+                logger.error(f"Error training model: {e}")
+                self.training_status.setText(f"Training error: {str(e)}")
+                QMessageBox.critical(
+                    self,
+                    "Training Error",
+                    f"An error occurred during training: {str(e)}"
+                )
+                self.train_button.setEnabled(True)
+        else:
+            QMessageBox.warning(
+                self,
+                "Classifier Unavailable",
+                "Gesture classifier is not available, cannot train model."
+            )
+            self.training_status.setText("Classifier not available")
+            self.train_button.setEnabled(True)
     
     @pyqtSlot()
     def _export_gestures(self):
@@ -683,14 +884,33 @@ class GestureTrainer(QWidget):
         
         if file_path:
             try:
-                with open(file_path, 'w') as f:
-                    json.dump(self.gestures, f, indent=2)
-                
-                QMessageBox.information(
-                    self,
-                    "Export Successful",
-                    f"Gestures have been exported to {file_path}"
-                )
+                # Load the actual gesture data from the classifier
+                if self.gesture_classifier:
+                    gesture_data = self.gesture_classifier._load_gesture_data()
+                    
+                    if not gesture_data:
+                        QMessageBox.warning(
+                            self,
+                            "Export Failed",
+                            "No gesture data available for export."
+                        )
+                        return
+                    
+                    # Export the data
+                    with open(file_path, 'w') as f:
+                        json.dump(gesture_data, f, indent=2)
+                    
+                    QMessageBox.information(
+                        self,
+                        "Export Successful",
+                        f"Gestures have been exported to {file_path}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Classifier Unavailable",
+                        "Gesture classifier is not available, cannot export gestures."
+                    )
                 
             except Exception as e:
                 logger.error(f"Error exporting gestures: {e}")
@@ -712,11 +932,31 @@ class GestureTrainer(QWidget):
         
         if file_path:
             try:
+                # Load the gesture data from the file
                 with open(file_path, 'r') as f:
                     imported_gestures = json.load(f)
                 
+                if not imported_gestures:
+                    QMessageBox.warning(
+                        self,
+                        "Import Failed",
+                        "No valid gesture data found in the file."
+                    )
+                    return
+                
+                if not self.gesture_classifier:
+                    QMessageBox.warning(
+                        self,
+                        "Classifier Unavailable",
+                        "Gesture classifier is not available, cannot import gestures."
+                    )
+                    return
+                
+                # Load existing gesture data
+                existing_data = self.gesture_classifier._load_gesture_data()
+                
                 # Check if we should merge or replace
-                if self.gestures:
+                if existing_data:
                     merge = QMessageBox.question(
                         self,
                         "Import Gestures",
@@ -730,33 +970,31 @@ class GestureTrainer(QWidget):
                     if merge == QMessageBox.Yes:
                         # Merge gestures
                         for name, data in imported_gestures.items():
-                            if name in self.gestures:
+                            if name in existing_data:
                                 # Create a new unique name
                                 base_name = name
                                 counter = 1
                                 new_name = f"{base_name} (imported {counter})"
                                 
-                                while new_name in self.gestures:
+                                while new_name in existing_data:
                                     counter += 1
                                     new_name = f"{base_name} (imported {counter})"
                                 
-                                self.gestures[new_name] = data
+                                existing_data[new_name] = data
                             else:
-                                self.gestures[name] = data
+                                existing_data[name] = data
                     else:
                         # Replace gestures
-                        self.gestures = imported_gestures
+                        existing_data = imported_gestures
                 else:
                     # No existing gestures, just use the imported ones
-                    self.gestures = imported_gestures
+                    existing_data = imported_gestures
+                
+                # Save the merged/replaced gesture data
+                self.gesture_classifier._save_gesture_data(existing_data)
                 
                 # Reload the gesture list
-                self.gesture_list.clear()
-                for gesture_name in self.gestures:
-                    self.gesture_list.addItem(gesture_name)
-                
-                # Save the gestures
-                self._save_gestures()
+                self._load_existing_gestures()
                 
                 QMessageBox.information(
                     self,
@@ -815,14 +1053,10 @@ class GestureTrainer(QWidget):
         if profile_name == self.current_profile:
             return
         
-        # Save current profile first
-        self._save_gestures()
-        
         # Switch to the new profile
         self.current_profile = profile_name
         
-        # Load gestures from the new profile
-        self.gestures = {}
+        # Load gestures for the new profile
         self._load_existing_gestures()
         
         # Update the UI
@@ -830,7 +1064,7 @@ class GestureTrainer(QWidget):
         
         # Update config
         self.config["actions"]["default_profile"] = profile_name
-        self.config_manager.save_config(self.config)
+        self.config_manager.save_config()  # Removed the config parameter
     
     @pyqtSlot(QListWidgetItem, QListWidgetItem)
     def _gesture_selected(self, current, previous):
@@ -856,11 +1090,10 @@ class GestureTrainer(QWidget):
             return
         
         gesture_data = self.gestures[gesture_name]
-        samples = gesture_data.get("samples", [])
         trained = gesture_data.get("trained", False)
+        sample_count = gesture_data.get("sample_count", 0)
         
         # Update sample count
-        sample_count = len(samples)
         self.sample_count_label.setText(f"{sample_count} samples" + 
                                       (" (trained)" if trained else " (not trained)"))
         
@@ -880,14 +1113,12 @@ class GestureTrainer(QWidget):
         # Enable train button if we have enough gestures with samples
         trainable_gestures = 0
         for g_name, g_data in self.gestures.items():
-            if len(g_data.get("samples", [])) > 0:
+            if g_data.get("sample_count", 0) > 0:
                 trainable_gestures += 1
         
         self.train_button.setEnabled(trainable_gestures >= 2)
     
     def closeEvent(self, event):
         """Handle window close event"""
-        # Save gestures before closing
-        self._save_gestures()
-        
+        # Nothing to save specifically here since we save immediately when changes are made
         event.accept()

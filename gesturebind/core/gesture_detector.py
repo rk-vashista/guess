@@ -9,6 +9,21 @@ import time
 import logging
 import numpy as np
 import cv2
+from pathlib import Path
+
+# Attempt to import ML libraries, gracefully handle if not available
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+
+# Import YOLOv8 if available
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -17,82 +32,132 @@ class GestureDetector:
     Detects and classifies hand gestures from video frames.
     """
     
-    def __init__(self, config):
+    def __init__(self, config, camera_manager=None):
         """
-        Initialize the gesture detector.
+        Initialize the gesture detector with configuration.
         
         Args:
-            config (dict): Application configuration dictionary
+            config (dict): Configuration dictionary
+            camera_manager (CameraManager, optional): Camera manager instance
         """
         self.config = config
+        self.camera_manager = camera_manager
         
         # Detection settings
-        self.engine = config.get("detection", {}).get("engine", "mediapipe")
-        self.confidence_threshold = config.get("detection", {}).get("confidence_threshold", 0.7)
-        self.cooldown_ms = config.get("detection", {}).get("cooldown_ms", 500)
-        self.min_detection_duration_ms = config.get("detection", {}).get("min_detection_duration_ms", 200)
-        self.use_landmark_smoothing = config.get("advanced", {}).get("landmark_smoothing", True)
+        detection_config = config.get("detection", {})
+        self.detection_engine = detection_config.get("engine", "mediapipe")
+        self.confidence_threshold = detection_config.get("confidence_threshold", 0.7)
+        self.cooldown_ms = detection_config.get("cooldown_ms", 500)
+        self.min_detection_duration_ms = detection_config.get("min_detection_duration_ms", 200)
         
-        # State variables
+        # Preprocessing settings
+        preprocessing_config = config.get("preprocessing", {})
+        self.use_grayscale = preprocessing_config.get("use_grayscale", False)
+        self.resize_frame = preprocessing_config.get("resize_frame", False)
+        self.resize_width = preprocessing_config.get("resize_width", 320)
+        self.resize_height = preprocessing_config.get("resize_height", 240)
+        self.use_roi = preprocessing_config.get("use_roi", False)
+        self.roi_x = preprocessing_config.get("roi_x", 100)
+        self.roi_y = preprocessing_config.get("roi_y", 100)
+        self.roi_width = preprocessing_config.get("roi_width", 440)
+        self.roi_height = preprocessing_config.get("roi_height", 280)
+        
+        # Landmark smoothing
+        smoothing_config = config.get("advanced", {})
+        self.landmark_smoothing = smoothing_config.get("landmark_smoothing", True)
+        self.smoothing_factor = smoothing_config.get("smoothing_factor", 0.5)
+        self.smoothing_window = smoothing_config.get("smoothing_window", 3)
+        
+        # State tracking
         self.last_detection_time = 0
         self.current_gesture = None
-        self.current_gesture_start_time = 0
-        self.previous_landmarks = None
+        self.gesture_start_time = 0
+        self.prev_landmarks = None
+        self.landmark_history = []
+        self.current_handedness = None
         
-        # Initialize detection engine
-        self._initialize_engine()
-        
-        logger.info(f"Gesture detector initialized using {self.engine} engine")
+        # Initialize the detection engine
+        self.engine = None
+        self.engine_initialized = False
+        self.classifier = None
+        self._init_detection_engine()
     
-    def _initialize_engine(self):
+    def _init_detection_engine(self):
         """Initialize the selected detection engine"""
-        if self.engine == "mediapipe":
+        if self.detection_engine == "mediapipe":
             self._initialize_mediapipe()
-        elif self.engine == "yolov8":
+        elif self.detection_engine == "yolov8":
             self._initialize_yolov8()
         else:
-            logger.warning(f"Unsupported engine: {self.engine}, falling back to mock engine")
             self._initialize_mock_engine()
+    
+    def set_classifier(self, classifier):
+        """
+        Set the ML-based gesture classifier.
+        
+        Args:
+            classifier: Trained gesture classifier instance
+        """
+        self.classifier = classifier
+        logger.info("Gesture classifier set")
     
     def _initialize_mediapipe(self):
         """Initialize MediaPipe Hands for gesture detection"""
         try:
-            import mediapipe as mp
+            if not MEDIAPIPE_AVAILABLE:
+                logger.error("MediaPipe is not available. Please install it with 'pip install mediapipe'")
+                self._initialize_mock_engine()
+                return
             
             self.mp_hands = mp.solutions.hands
             self.mp_drawing = mp.solutions.drawing_utils
             self.mp_drawing_styles = mp.solutions.drawing_styles
             
-            # Initialize hands with custom parameters
+            # Configure MediaPipe Hands
             self.hands = self.mp_hands.Hands(
                 static_image_mode=False,
                 max_num_hands=2,
-                min_detection_confidence=self.confidence_threshold - 0.2,  # Lower threshold for detection
-                min_tracking_confidence=self.confidence_threshold - 0.1    # Slightly higher for tracking
+                min_detection_confidence=self.confidence_threshold,
+                min_tracking_confidence=self.confidence_threshold
             )
             
-            logger.info("MediaPipe Hands initialized successfully")
+            self.engine = "mediapipe"
             self.engine_initialized = True
+            logger.info("MediaPipe Hands initialized for gesture detection")
             
         except ImportError:
-            logger.error("MediaPipe import failed, falling back to mock engine")
+            logger.error("MediaPipe not available. Please install it with 'pip install mediapipe'")
             self._initialize_mock_engine()
         except Exception as e:
-            logger.error(f"Error initializing MediaPipe: {e}")
+            logger.error(f"Failed to initialize MediaPipe Hands: {e}")
             self._initialize_mock_engine()
     
     def _initialize_yolov8(self):
         """Initialize YOLOv8 for gesture detection"""
         try:
-            # In a real implementation, this would load the YOLOv8 model
-            # and set up the inference pipeline
+            if not YOLO_AVAILABLE:
+                logger.error("YOLOv8 is not available. Please install it with 'pip install ultralytics'")
+                self._initialize_mock_engine()
+                return
             
-            # For now, we'll just log that it's not fully implemented
-            logger.warning("YOLOv8 engine not fully implemented, falling back to mock engine")
+            # Get model path from config
+            model_path = self.config.get("detection", {}).get("yolo_model_path", "")
+            if not model_path or not os.path.exists(model_path):
+                logger.error(f"YOLOv8 model not found at: {model_path}")
+                self._initialize_mock_engine()
+                return
+            
+            # Load the YOLO model
+            self.yolo_model = YOLO(model_path)
+            self.engine = "yolov8"
+            self.engine_initialized = True
+            logger.info(f"YOLOv8 initialized with model: {model_path}")
+            
+        except ImportError:
+            logger.error("YOLOv8 not available. Please install it with 'pip install ultralytics'")
             self._initialize_mock_engine()
-            
         except Exception as e:
-            logger.error(f"Error initializing YOLOv8: {e}")
+            logger.error(f"Failed to initialize YOLOv8: {e}")
             self._initialize_mock_engine()
     
     def _initialize_mock_engine(self):
@@ -117,93 +182,169 @@ class GestureDetector:
         self.min_detection_duration_ms = config.get("detection", {}).get("min_detection_duration_ms", 200)
         self.use_landmark_smoothing = config.get("advanced", {}).get("landmark_smoothing", True)
         
+        # Update preprocessing settings
+        self.preprocess_config = config.get("preprocessing", {})
+        self.use_grayscale = self.preprocess_config.get("use_grayscale", False)
+        self.resize_frame = self.preprocess_config.get("resize_frame", False)
+        self.resize_width = self.preprocess_config.get("resize_width", 640)
+        self.resize_height = self.preprocess_config.get("resize_height", 480)
+        self.use_roi = self.preprocess_config.get("use_roi", False)
+        self.roi_x = self.preprocess_config.get("roi_x", 0)
+        self.roi_y = self.preprocess_config.get("roi_y", 0)
+        self.roi_width = self.preprocess_config.get("roi_width", 640)
+        self.roi_height = self.preprocess_config.get("roi_height", 480)
+        
+        # Update smoothing parameters
+        self.smoothing_factor = config.get("advanced", {}).get("smoothing_factor", 0.5)
+        self.smoothing_window = config.get("advanced", {}).get("smoothing_window", 3)
+        
         # Check if engine changed, if so reinitialize
         new_engine = config.get("detection", {}).get("engine", "mediapipe")
         if new_engine != self.engine:
-            self.engine = new_engine
-            self._initialize_engine()
+            self.detection_engine = new_engine
+            self._init_detection_engine()
         
         logger.info(f"Gesture detector configuration updated")
-    
-    def _smooth_landmarks(self, landmarks, alpha=0.5):
+
+    def _preprocess_frame(self, frame):
         """
-        Apply smoothing to landmarks to reduce jitter.
-        
-        Args:
-            landmarks: Detected landmarks
-            alpha: Smoothing factor (0-1, lower = more smoothing)
-            
-        Returns:
-            Smoothed landmarks
-        """
-        if self.previous_landmarks is None:
-            self.previous_landmarks = landmarks
-            return landmarks
-        
-        # Apply exponential smoothing
-        smoothed = []
-        for i, landmark in enumerate(landmarks):
-            if i < len(self.previous_landmarks):
-                prev = self.previous_landmarks[i]
-                # Interpolate between previous and current
-                smoothed_landmark = {
-                    'x': alpha * landmark['x'] + (1 - alpha) * prev['x'],
-                    'y': alpha * landmark['y'] + (1 - alpha) * prev['y'],
-                    'z': alpha * landmark['z'] + (1 - alpha) * prev['z']
-                }
-                smoothed.append(smoothed_landmark)
-            else:
-                smoothed.append(landmark)
-        
-        self.previous_landmarks = smoothed
-        return smoothed
-    
-    def _process_with_mediapipe(self, frame):
-        """
-        Process frame using MediaPipe Hands.
+        Apply preprocessing steps to the input frame
         
         Args:
             frame: Input video frame
             
         Returns:
-            tuple: (gesture_name, confidence, processed_frame)
+            Preprocessed frame
         """
-        # Convert to RGB for MediaPipe
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Make a copy to avoid modifying the original
+        processed = frame.copy()
         
-        # Process frame with MediaPipe
-        results = self.hands.process(rgb_frame)
+        # Apply ROI cropping if enabled
+        if self.use_roi:
+            try:
+                h, w = processed.shape[:2]
+                x = min(max(0, self.roi_x), w)
+                y = min(max(0, self.roi_y), h)
+                width = min(self.roi_width, w - x)
+                height = min(self.roi_height, h - y)
+                processed = processed[y:y+height, x:x+width]
+            except Exception as e:
+                logger.error(f"Error applying ROI: {e}")
         
-        # Copy frame for visualization
-        processed_frame = frame.copy()
+        # Resize if enabled
+        if self.resize_frame:
+            try:
+                processed = cv2.resize(
+                    processed, 
+                    (self.resize_width, self.resize_height), 
+                    interpolation=cv2.INTER_AREA
+                )
+            except Exception as e:
+                logger.error(f"Error resizing frame: {e}")
+            
+        # Convert to grayscale if enabled (but only for internal processing)
+        if self.use_grayscale:
+            try:
+                processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+                # Convert back to BGR for compatibility with detection engines
+                processed = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+            except Exception as e:
+                logger.error(f"Error converting to grayscale: {e}")
         
-        gesture_name = None
-        confidence = 0.0
+        return processed
+    
+    def _smooth_landmarks(self, landmarks, alpha=None):
+        """
+        Apply smoothing to hand landmarks to reduce jitter
         
-        # Check if hands detected
-        if results.multi_hand_landmarks:
-            for hand_landmarks, hand_info in zip(results.multi_hand_landmarks, results.multi_handedness):
+        Args:
+            landmarks: MediaPipe hand landmarks
+            alpha: Smoothing factor (0-1, lower = more smoothing)
+            
+        Returns:
+            Smoothed landmarks
+        """
+        if not self.landmark_smoothing or landmarks is None:
+            return landmarks
+            
+        if alpha is None:
+            alpha = self.smoothing_factor
+            
+        # Add current landmarks to history
+        self.landmark_history.append(landmarks)
+        
+        # Keep history limited to window size
+        if len(self.landmark_history) > self.smoothing_window:
+            self.landmark_history.pop(0)
+            
+        # Apply exponential moving average
+        smoothed = landmarks
+        
+        if self.prev_landmarks is not None:
+            # Create a copy to avoid modifying original landmarks
+            smoothed = []
+            for i, lm in enumerate(landmarks):
+                if i < len(self.prev_landmarks):
+                    # Smooth x, y, z coordinates
+                    smoothed_x = alpha * lm.x + (1 - alpha) * self.prev_landmarks[i].x
+                    smoothed_y = alpha * lm.y + (1 - alpha) * self.prev_landmarks[i].y
+                    smoothed_z = alpha * lm.z + (1 - alpha) * self.prev_landmarks[i].z
+                    
+                    # Create new landmark with smoothed values
+                    smoothed_lm = type(lm)()
+                    smoothed_lm.x = smoothed_x
+                    smoothed_lm.y = smoothed_y
+                    smoothed_lm.z = smoothed_z
+                    smoothed.append(smoothed_lm)
+                else:
+                    smoothed.append(lm)
+                    
+        # Update previous landmarks
+        self.prev_landmarks = smoothed
+            
+        return smoothed
+    
+    def _process_with_mediapipe(self, frame):
+        """
+        Process a frame with MediaPipe Hands
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            Tuple of (gesture_name, confidence, processed_frame)
+        """
+        if not self.engine_initialized or self.engine != "mediapipe":
+            return None, 0, frame
+            
+        # Process the frame
+        try:
+            # Convert to RGB for MediaPipe
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Process with MediaPipe
+            results = self.hands.process(frame_rgb)
+            
+            # Create a copy for visualization
+            processed_frame = frame.copy()
+            
+            # Check if we have hand landmarks
+            if results.multi_hand_landmarks:
+                # Get the first detected hand
+                hand_landmarks = results.multi_hand_landmarks[0]
+                
                 # Get handedness (left/right)
-                handedness = hand_info.classification[0].label
+                handedness = None
+                if results.multi_handedness:
+                    handedness_info = results.multi_handedness[0]
+                    handedness = handedness_info.classification[0].label
+                    self.current_handedness = handedness
                 
-                # Extract landmark coordinates
-                landmarks = []
-                for lm in hand_landmarks.landmark:
-                    landmarks.append({'x': lm.x, 'y': lm.y, 'z': lm.z})
+                # Apply smoothing
+                if self.landmark_smoothing:
+                    hand_landmarks.landmark = self._smooth_landmarks(hand_landmarks.landmark)
                 
-                # Apply smoothing if enabled
-                if self.use_landmark_smoothing:
-                    landmarks = self._smooth_landmarks(landmarks)
-                
-                # Classify gesture based on landmarks
-                gesture, conf = self._classify_gesture(landmarks, handedness)
-                
-                # Keep the highest confidence gesture
-                if conf > confidence and conf >= self.confidence_threshold:
-                    gesture_name = gesture
-                    confidence = conf
-                
-                # Draw landmarks on the processed frame
+                # Draw hand landmarks on the frame
                 self.mp_drawing.draw_landmarks(
                     processed_frame,
                     hand_landmarks,
@@ -212,265 +353,355 @@ class GestureDetector:
                     self.mp_drawing_styles.get_default_hand_connections_style()
                 )
                 
-                # Add label with gesture name and confidence
-                if gesture:
-                    h, w, _ = processed_frame.shape
-                    wrist_x = int(hand_landmarks.landmark[0].x * w)
-                    wrist_y = int(hand_landmarks.landmark[0].y * h)
+                # Classify the gesture using the ML model
+                if self.classifier:
+                    gesture_name, confidence = self._classify_gesture(hand_landmarks, handedness)
                     
-                    # Draw label background
-                    label_text = f"{gesture} ({conf:.1%})"
-                    (text_width, text_height), _ = cv2.getTextSize(
-                        label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                    # Check for cooldown
+                    current_time = time.time() * 1000  # convert to ms
+                    cooldown_expired = (current_time - self.last_detection_time) > self.cooldown_ms
                     
-                    cv2.rectangle(
-                        processed_frame,
-                        (wrist_x, wrist_y - text_height - 10),
-                        (wrist_x + text_width + 10, wrist_y),
-                        (0, 0, 0), -1
-                    )
-                    
-                    # Draw label text
-                    cv2.putText(
-                        processed_frame, 
-                        label_text, 
-                        (wrist_x + 5, wrist_y - 5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
-                        (255, 255, 255), 1
-                    )
-        
-        return gesture_name, confidence, processed_frame
+                    if gesture_name and confidence >= self.confidence_threshold and cooldown_expired:
+                        # Track gesture duration
+                        if self.current_gesture != gesture_name:
+                            self.current_gesture = gesture_name
+                            self.gesture_start_time = current_time
+                        
+                        # Check if gesture has persisted long enough
+                        gesture_duration = current_time - self.gesture_start_time
+                        if gesture_duration >= self.min_detection_duration_ms:
+                            # Update the detection time
+                            self.last_detection_time = current_time
+                            
+                            # Display the gesture name
+                            cv2.putText(
+                                processed_frame,
+                                f"{gesture_name} ({confidence:.1%})",
+                                (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1,
+                                (0, 255, 0),
+                                2
+                            )
+                            
+                            return gesture_name, confidence, processed_frame
+            
+            # Reset current gesture if no hands detected
+            if not results.multi_hand_landmarks:
+                self.current_gesture = None
+            
+            return None, 0, processed_frame
+            
+        except Exception as e:
+            logger.error(f"Error processing frame with MediaPipe: {e}")
+            return None, 0, frame
     
     def _process_with_yolov8(self, frame):
         """
-        Process frame using YOLOv8.
+        Process a frame with YOLOv8
         
         Args:
             frame: Input video frame
             
         Returns:
-            tuple: (gesture_name, confidence, processed_frame)
+            Tuple of (gesture_name, confidence, processed_frame)
         """
-        # In a real implementation, this would run the YOLOv8 model
-        # For now, we'll just return a mock result
+        if not self.engine_initialized or self.engine != "yolov8":
+            return None, 0, frame
+            
+        # Process the frame
+        try:
+            # Create a copy for visualization
+            processed_frame = frame.copy()
+            
+            # Run YOLOv8 detection
+            results = self.yolo_model(frame, conf=self.confidence_threshold)
+            
+            # Process detection results
+            if len(results) > 0 and len(results[0].boxes) > 0:
+                # Get the highest confidence detection
+                result = results[0]
+                
+                # Extract boxes and class names
+                boxes = result.boxes.cpu().numpy()
+                class_names = result.names
+                
+                # Find the detection with highest confidence
+                max_conf = 0
+                max_conf_idx = -1
+                
+                for i, box in enumerate(boxes):
+                    conf = box.conf[0]
+                    if conf > max_conf:
+                        max_conf = conf
+                        max_conf_idx = i
+                
+                if max_conf_idx >= 0:
+                    # Get the best detection
+                    box = boxes[max_conf_idx]
+                    class_id = int(box.cls[0])
+                    conf = box.conf[0]
+                    
+                    # Get the gesture name
+                    gesture_name = class_names.get(class_id, f"unknown-{class_id}")
+                    
+                    # Calculate cooldown
+                    current_time = time.time() * 1000
+                    cooldown_expired = (current_time - self.last_detection_time) > self.cooldown_ms
+                    
+                    if gesture_name and conf >= self.confidence_threshold and cooldown_expired:
+                        # Track gesture duration
+                        if self.current_gesture != gesture_name:
+                            self.current_gesture = gesture_name
+                            self.gesture_start_time = current_time
+                        
+                        # Check if gesture has persisted long enough
+                        gesture_duration = current_time - self.gesture_start_time
+                        if gesture_duration >= self.min_detection_duration_ms:
+                            # Update the detection time
+                            self.last_detection_time = current_time
+                            
+                            # Draw the detection box
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            
+                            # Display the gesture name
+                            cv2.putText(
+                                processed_frame,
+                                f"{gesture_name} ({conf:.1%})",
+                                (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1,
+                                (0, 255, 0),
+                                2
+                            )
+                            
+                            return gesture_name, conf, processed_frame
+            
+            # Reset current gesture if no detection
+            if len(results) == 0 or len(results[0].boxes) == 0:
+                self.current_gesture = None
+                
+            return None, 0, processed_frame
+            
+        except Exception as e:
+            logger.error(f"Error processing frame with YOLOv8: {e}")
+            return None, 0, frame
+    
+    def _process_with_mock(self, frame):
+        """
+        Process a frame with mock detector (for testing)
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            Tuple of (gesture_name, confidence, processed_frame)
+        """
+        # Create a copy for visualization
         processed_frame = frame.copy()
         
-        # Add "not implemented" text
-        h, w, _ = processed_frame.shape
-        text = "YOLOv8 not fully implemented"
+        # Show a message
         cv2.putText(
             processed_frame,
-            text,
-            (20, 40),
+            "Mock detector active (no ML engine)",
+            (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
+            0.7,
             (0, 0, 255),
             2
         )
         
-        return None, 0.0, processed_frame
-    
-    def _process_with_mock(self, frame):
-        """
-        Process frame using mock detection for testing.
+        # Simulate random gesture detection periodically
+        current_time = time.time() * 1000
+        cooldown_expired = (current_time - self.last_detection_time) > self.cooldown_ms
         
-        Args:
-            frame: Input video frame
+        if cooldown_expired and np.random.random() < 0.05:  # 5% chance per frame
+            # Pick a random gesture
+            gestures = ["wave", "pinch", "fist", "point", "ok", "swipe"]
+            gesture_name = gestures[np.random.randint(0, len(gestures))]
+            confidence = np.random.uniform(0.7, 0.95)
             
-        Returns:
-            tuple: (gesture_name, confidence, processed_frame)
-        """
-        processed_frame = frame.copy()
-        
-        # Add mock detection text
-        cv2.putText(
-            processed_frame,
-            "Mock Detection Active",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
-            (0, 255, 0),
-            2
-        )
-        
-        # Simple mock detection based on frame brightness in the center
-        h, w, _ = frame.shape
-        center_roi = frame[h//3:2*h//3, w//3:2*w//3]
-        
-        # Calculate average brightness in the center
-        gray_center = cv2.cvtColor(center_roi, cv2.COLOR_BGR2GRAY)
-        avg_brightness = gray_center.mean()
-        
-        # Simulated gesture detection based on brightness
-        gesture_name = None
-        confidence = 0.0
-        
-        if avg_brightness > 150:
-            gesture_name = "open_palm"
-            confidence = 0.8
+            # Update the detection time
+            self.last_detection_time = current_time
             
-            # Draw a rectangle in the center to indicate detection
-            cv2.rectangle(
-                processed_frame,
-                (w//3, h//3),
-                (2*w//3, 2*h//3),
-                (0, 255, 0),
-                2
-            )
-        elif avg_brightness > 100:
-            gesture_name = "fist"
-            confidence = 0.7
-            
-            # Draw a rectangle in the center to indicate detection
-            cv2.rectangle(
-                processed_frame,
-                (w//3, h//3),
-                (2*w//3, 2*h//3),
-                (0, 200, 200),
-                2
-            )
-        
-        # Display current mock gesture if detected
-        if gesture_name:
+            # Display the gesture name
             cv2.putText(
                 processed_frame,
                 f"{gesture_name} ({confidence:.1%})",
-                (20, 80),
+                (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 255),
+                1,
+                (0, 255, 0),
                 2
             )
-        
-        return gesture_name, confidence, processed_frame
+            
+            return gesture_name, confidence, processed_frame
+            
+        return None, 0, processed_frame
     
     def _classify_gesture(self, landmarks, handedness):
         """
-        Classify the gesture based on hand landmarks.
+        Classify hand landmarks into a gesture using the ML classifier
         
         Args:
-            landmarks: List of landmark coordinates
-            handedness: "Left" or "Right"
+            landmarks: MediaPipe hand landmarks
+            handedness: Hand classification (left/right)
             
         Returns:
-            tuple: (gesture_name, confidence)
+            Tuple of (gesture_name, confidence)
         """
-        # In a real implementation, this would use a trained ML model
-        # or a rule-based classifier to identify gestures
-        
-        # For this implementation, we'll use a simple rule-based approach
-        # Basic gesture recognition using finger positions
-        
-        # Get fingertips and palm landmarks
-        if len(landmarks) < 21:
+        if self.classifier is None:
             return None, 0.0
             
-        wrist = landmarks[0]
-        thumb_tip = landmarks[4]
-        index_tip = landmarks[8]
-        middle_tip = landmarks[12]
-        ring_tip = landmarks[16]
-        pinky_tip = landmarks[20]
-        
-        # Middle of palm for reference
-        palm_center = {
-            'x': landmarks[0]['x'],
-            'y': landmarks[0]['y'],
-            'z': landmarks[0]['z']
-        }
-        
-        # Check if fingers are extended by comparing y coordinates
-        # (this is a simplified approach and would need refinement in a real app)
-        fingers_extended = [
-            thumb_tip['x'] > wrist['x'] if handedness == "Right" else thumb_tip['x'] < wrist['x'],  # Thumb
-            index_tip['y'] < palm_center['y'] - 0.05,  # Index
-            middle_tip['y'] < palm_center['y'] - 0.05,  # Middle
-            ring_tip['y'] < palm_center['y'] - 0.05,  # Ring
-            pinky_tip['y'] < palm_center['y'] - 0.05   # Pinky
-        ]
-        
-        # Classify gestures based on finger positions
-        if sum(fingers_extended[1:]) >= 4:
-            # All fingers except thumb are extended
-            if not fingers_extended[0]:
-                return "open_palm", 0.85
-            else:
-                return "open_hand", 0.8
-        
-        elif not any(fingers_extended):
-            # No fingers extended
-            return "fist", 0.9
-        
-        elif fingers_extended[1] and not any(fingers_extended[2:]):
-            # Only index finger extended
-            return "pointing", 0.85
-        
-        elif fingers_extended[1] and fingers_extended[2] and not any(fingers_extended[3:]):
-            # Index and middle extended
-            return "peace_sign", 0.8
-        
-        elif fingers_extended[0] and not any(fingers_extended[1:]):
-            # Only thumb extended
-            if thumb_tip['y'] < palm_center['y']:
-                return "thumbs_up", 0.7
-            else:
-                return "thumbs_down", 0.7
-        
-        # If no clear gesture pattern is recognized
-        return None, 0.3
+        try:
+            # Extract landmark features
+            landmark_features = []
+            for landmark in landmarks.landmark:
+                # Normalize coordinates (x, y, z)
+                landmark_features.extend([landmark.x, landmark.y, landmark.z])
+            
+            # Add handedness as a feature (0 for left, 1 for right)
+            hand_value = 0.5  # default if unknown
+            if handedness:
+                if handedness.lower() == "left":
+                    hand_value = 0.0
+                elif handedness.lower() == "right":
+                    hand_value = 1.0
+            
+            # Add handedness to features
+            landmark_features.append(hand_value)
+            
+            # Convert to numpy array
+            features = np.array(landmark_features, dtype=np.float32)
+            
+            # Classify the landmarks
+            gesture_name, confidence = self.classifier.classify(features)
+            
+            return gesture_name, confidence
+            
+        except Exception as e:
+            logger.error(f"Error classifying gesture: {e}")
+            return None, 0.0
     
     def detect_gesture(self, frame):
         """
-        Process a frame and detect gestures.
+        Detect and classify gestures in a frame
         
         Args:
             frame: Input video frame
             
         Returns:
-            tuple: (gesture_name, confidence, processed_frame)
-                gesture_name: Name of detected gesture or None
-                confidence: Detection confidence (0.0-1.0)
-                processed_frame: Frame with visualization
+            Tuple of (gesture_name, confidence, processed_frame)
         """
-        # Check if we're in cooldown period
-        current_time = time.time() * 1000  # Get current time in ms
-        if (current_time - self.last_detection_time) < self.cooldown_ms:
-            # In cooldown, return None for gesture
-            return None, 0.0, frame.copy()
-        
-        # Process frame with appropriate engine
-        if self.engine == "mediapipe":
-            gesture_name, confidence, processed_frame = self._process_with_mediapipe(frame)
-        elif self.engine == "yolov8":
-            gesture_name, confidence, processed_frame = self._process_with_yolov8(frame)
-        else:  # mock engine
-            gesture_name, confidence, processed_frame = self._process_with_mock(frame)
-        
-        # Apply minimum detection duration logic
-        if gesture_name:
-            if self.current_gesture != gesture_name:
-                # New gesture detected, start timer
-                self.current_gesture = gesture_name
-                self.current_gesture_start_time = current_time
+        if frame is None or not self.engine_initialized:
+            return None, 0.0, frame
+            
+        try:
+            # Preprocess the frame
+            processed = self._preprocess_frame(frame)
+            
+            # Process with selected engine
+            if self.engine == "mediapipe":
+                return self._process_with_mediapipe(processed)
+            elif self.engine == "yolov8":
+                return self._process_with_yolov8(processed)
+            else:  # Mock engine
+                return self._process_with_mock(processed)
                 
-                # Not yet held long enough
-                return None, 0.0, processed_frame
-            else:
-                # Same gesture, check if held long enough
-                if (current_time - self.current_gesture_start_time) >= self.min_detection_duration_ms:
-                    # Gesture held long enough, trigger detection
-                    self.last_detection_time = current_time
-                    return gesture_name, confidence, processed_frame
-                else:
-                    # Not held long enough yet
-                    return None, 0.0, processed_frame
-        else:
-            # No gesture detected
-            self.current_gesture = None
-            return None, 0.0, processed_frame
+        except Exception as e:
+            logger.error(f"Error detecting gesture: {e}")
+            return None, 0.0, frame
+    
+    def process_frame(self, frame):
+        """
+        Process a frame and return gesture detection results
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            Tuple of (gesture_name, confidence, processed_frame, handedness)
+        """
+        gesture_name, confidence, processed_frame = self.detect_gesture(frame)
+        return gesture_name, confidence, processed_frame, self.current_handedness
+    
+    def draw_landmarks(self, frame):
+        """
+        Draw hand landmarks on a frame without gesture detection
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            Frame with landmarks drawn
+        """
+        if not self.engine_initialized or frame is None:
+            return frame
+            
+        # Create a copy for visualization
+        processed_frame = frame.copy()
+        
+        try:
+            # Process with MediaPipe to get landmarks
+            if self.engine == "mediapipe":
+                # Convert to RGB for MediaPipe
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Process with MediaPipe
+                results = self.hands.process(frame_rgb)
+                
+                # Draw hand landmarks if detected
+                if results.multi_hand_landmarks:
+                    for hand_landmarks in results.multi_hand_landmarks:
+                        self.mp_drawing.draw_landmarks(
+                            processed_frame,
+                            hand_landmarks,
+                            self.mp_hands.HAND_CONNECTIONS,
+                            self.mp_drawing_styles.get_default_hand_landmarks_style(),
+                            self.mp_drawing_styles.get_default_hand_connections_style()
+                        )
+            elif self.engine == "yolov8":
+                # Run YOLOv8 detection
+                results = self.yolo_model(frame, conf=self.confidence_threshold)
+                
+                # Draw the detection boxes
+                for r in results:
+                    boxes = r.boxes
+                    for box in boxes:
+                        # Draw the box
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        
+                        # Add class name and confidence
+                        cls = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        name = r.names[cls]
+                        
+                        cv2.putText(
+                            processed_frame,
+                            f"{name} ({conf:.1%})",
+                            (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 0),
+                            2
+                        )
+        except Exception as e:
+            logger.error(f"Error drawing landmarks: {e}")
+            
+        return processed_frame
+    
+    def get_handedness(self):
+        """
+        Get the handedness of the last detected hand
+        
+        Returns:
+            String: "Left" or "Right" or None
+        """
+        return self.current_handedness
     
     def __del__(self):
-        """Clean up resources when object is destroyed"""
-        # Release MediaPipe resources if initialized
-        if hasattr(self, 'hands'):
+        """Clean up resources"""
+        if self.engine == "mediapipe" and hasattr(self, 'hands'):
             self.hands.close()

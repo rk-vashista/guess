@@ -7,7 +7,7 @@ This module provides the settings configuration interface.
 import os
 import logging
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                           QPushButton, QComboBox, QSpinBox, QSlider,
+                           QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QSlider,
                            QGroupBox, QFormLayout, QTabWidget, QCheckBox,
                            QMessageBox, QFileDialog)
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal

@@ -13,10 +13,22 @@ camera:
   flip_horizontal: true  # Mirror camera feed for more intuitive gestures
 
 detection:
-  engine: "mediapipe"  # Options: mediapipe, yolov8
+  engine: "mediapipe"  # Options: mediapipe, yolov8, mock
   confidence_threshold: 0.7
   cooldown_ms: 500  # Cooldown between gesture detections to prevent rapid triggering
   min_detection_duration_ms: 200  # Minimum duration a gesture must be held to trigger
+
+# Preprocessing options for optimizing detection
+preprocessing:
+  use_grayscale: false  # Convert to grayscale for faster processing
+  resize_frame: false   # Resize input frame for processing
+  resize_width: 320     # Width to resize to if resize_frame is true
+  resize_height: 240    # Height to resize to if resize_frame is true
+  use_roi: false        # Use region of interest to focus detection
+  roi_x: 100            # ROI starting X coordinate
+  roi_y: 100            # ROI starting Y coordinate
+  roi_width: 440        # ROI width
+  roi_height: 280       # ROI height
 
 ui:
   theme: "system"  # Options: system, light, dark
@@ -64,4 +76,11 @@ advanced:
   model_folder: "~/gesturebind/data/models"
   max_log_files: 10
   max_log_size_mb: 5
-  landmark_smoothing: true  # Apply smoothing to landmarks for more stable detection
+  landmark_smoothing: true    # Apply smoothing to landmarks for more stable detection
+  smoothing_factor: 0.5       # Smoothing factor (0-1, lower = more smoothing)
+  smoothing_window: 3         # Window size for historical smoothing
+
+# Paths for models and data
+paths:
+  model_folder: "~/gesturebind/data/models"
+  gesture_data_folder: "~/gesturebind/data/gestures"

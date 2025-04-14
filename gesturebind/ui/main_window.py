@@ -16,10 +16,7 @@ from PyQt5.QtWidgets import (QMainWindow, QAction, QTabWidget, QWidget,
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 
-from core.gesture_detector import GestureDetector
-from core.camera_manager import CameraManager
-from core.action_mapper import ActionMapper
-from models.gesture_classifier import GestureClassifier
+from core.gesture_manager import GestureManager  # Import the new GestureManager class
 from ui.gesture_trainer import GestureTrainer
 from ui.settings_panel import SettingsPanel
 from ui.action_overlay import ActionOverlay  # Import the ActionOverlay component
@@ -45,10 +42,7 @@ class MainWindow(QMainWindow):
         self.config = config_manager.load_config()
         
         self.detection_active = False
-        self.camera_manager = None
-        self.gesture_detector = None
-        self.action_mapper = None
-        self.gesture_classifier = None
+        self.gesture_manager = None
         
         self.frame_update_timer = QTimer(self)
         self.frame_update_timer.timeout.connect(self.update_frame)
@@ -64,10 +58,19 @@ class MainWindow(QMainWindow):
         self.action_overlay.set_timeout(overlay_timeout)
         
         self._init_ui()
-        self._init_components()
         self._setup_tray_icon()
         
+        # Set window flags to ensure proper display
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        
+        # Force the window to be visible
+        self.setVisible(True)
+        
         logger.info("GestureBind main window initialized")
+        logger.info(f"Window geometry: {self.geometry()}")
+        logger.info(f"Window is visible: {self.isVisible()}")
+        logger.info(f"Window is active: {self.isActiveWindow()}")
+        logger.info(f"Window state: {self.windowState()}")
     
     def _init_ui(self):
         """Initialize the user interface"""
@@ -191,6 +194,11 @@ class MainWindow(QMainWindow):
         self.resolution_label = QLabel("Resolution: -")
         stats_layout.addWidget(self.resolution_label)
         
+        # Add pause detection checkbox
+        self.pause_detection_checkbox = QCheckBox("Pause Detection")
+        self.pause_detection_checkbox.toggled.connect(self._toggle_pause_detection)
+        stats_layout.addWidget(self.pause_detection_checkbox)
+        
         # Add statistics to the layout
         layout.addWidget(stats_group, 1, 2, 1, 1)
     
@@ -257,37 +265,25 @@ class MainWindow(QMainWindow):
         docs_action.triggered.connect(self._open_documentation)
         help_menu.addAction(docs_action)
     
-    def _init_components(self):
-        """Initialize the application components"""
+    def _init_gesture_manager(self):
+        """Initialize the gesture manager"""
         try:
-            # Initialize components only when needed to save resources
-            if not self.detection_active:
-                return
-                
-            # Initialize camera manager
-            self.camera_manager = CameraManager(self.config)
-            if not self.camera_manager.initialize():
-                raise Exception("Failed to initialize camera")
+            # Create gesture manager instance
+            self.gesture_manager = GestureManager(self.config_manager)
             
-            # Initialize gesture detector
-            self.gesture_detector = GestureDetector(self.config)
+            # Register as an observer for gesture events
+            self.gesture_manager.register_observer(self)
             
-            # Initialize action mapper
-            self.action_mapper = ActionMapper(self.config)
-            
-            # Initialize gesture classifier
-            self.gesture_classifier = GestureClassifier(self.config)
-            
-            logger.info("Components initialized successfully")
+            return True
             
         except Exception as e:
-            logger.error(f"Error initializing components: {e}")
+            logger.error(f"Error initializing gesture manager: {e}")
             QMessageBox.critical(
                 self,
                 "Initialization Error",
-                f"Failed to initialize components: {str(e)}"
+                f"Failed to initialize gesture manager: {str(e)}"
             )
-            self.detection_active = False
+            return False
     
     def _setup_tray_icon(self):
         """Set up system tray icon if supported"""
@@ -357,52 +353,55 @@ class MainWindow(QMainWindow):
             # Stop updating frames
             self.frame_update_timer.stop()
             
-            # Release camera resources
-            if self.camera_manager:
-                self.camera_manager.stop_capture()
+            # Stop gesture processing
+            if self.gesture_manager:
+                self.gesture_manager.stop_processing()
                 
             self.camera_label.setText("Camera not started")
             self.statusBar.showMessage("Detection stopped")
             
         else:
-            # Initialize components if needed
-            if not self.camera_manager:
-                self._init_components()
-                if not self.camera_manager:
-                    return
+            # Initialize gesture manager if needed
+            if not self.gesture_manager and not self._init_gesture_manager():
+                return
             
             # Start detection
-            self.detection_active = True
-            self.detection_toggle.setText("Stop Detection")
-            self.detection_status.setText("Detection Active")
-            self.detection_status.setStyleSheet("font-weight: bold; color: green;")
-            
-            # Start camera
-            if self.camera_manager.start_capture():
+            if self.gesture_manager.start_processing():
+                self.detection_active = True
+                self.detection_toggle.setText("Stop Detection")
+                self.detection_status.setText("Detection Active")
+                self.detection_status.setStyleSheet("font-weight: bold; color: green;")
+                
                 # Start frame update timer
                 self.frame_update_timer.start(33)  # ~30 FPS UI update rate
                 self.statusBar.showMessage("Detection started")
             else:
                 QMessageBox.warning(
                     self,
-                    "Camera Error",
-                    "Failed to start camera. Please check your camera connection and settings."
+                    "Detection Error",
+                    "Failed to start gesture detection. Please check your camera connection and settings."
                 )
-                self.toggle_detection()  # Turn off detection
+    
+    def _toggle_pause_detection(self, paused):
+        """Toggle pause/resume of gesture detection"""
+        if self.gesture_manager and self.detection_active:
+            if paused:
+                self.gesture_manager.pause_detection()
+                self.statusBar.showMessage("Detection paused (camera still running)")
+            else:
+                self.gesture_manager.resume_detection()
+                self.statusBar.showMessage("Detection resumed")
     
     @pyqtSlot()
     def update_frame(self):
-        """Update the camera preview frame and process gestures"""
-        if not self.detection_active or not self.camera_manager:
+        """Update the camera preview frame with gesture detection overlays"""
+        if not self.detection_active or not self.gesture_manager:
             return
         
-        # Get latest frame
-        frame = self.camera_manager.get_frame()
-        if frame is None:
+        # Get processed frame with gesture visualization
+        processed_frame = self.gesture_manager.get_latest_processed_frame()
+        if processed_frame is None:
             return
-        
-        # Process frame with gesture detector
-        gesture_name, confidence, processed_frame = self.gesture_detector.detect_gesture(frame)
         
         # Update UI with the processed frame
         height, width, channels = processed_frame.shape
@@ -414,40 +413,35 @@ class MainWindow(QMainWindow):
         q_img = QImage(cvt_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
         self.camera_label.setPixmap(QPixmap.fromImage(q_img))
         
-        # Update stats
-        stats = self.camera_manager.get_stats()
-        self.fps_label.setText(f"FPS: {stats['fps']:.1f}")
-        self.resolution_label.setText(f"Resolution: {stats['resolution']}")
+        # Get latest gesture info
+        gesture_name, confidence, handedness = self.gesture_manager.get_latest_gesture_info()
         
-        # If a gesture was detected
+        # Update gesture info in UI if available
         if gesture_name:
-            # Update UI
-            self.last_detected_gesture = gesture_name
-            self.last_gesture_confidence = confidence
-            
             self.last_gesture_label.setText(f"Detected: {gesture_name}")
             self.confidence_label.setText(f"Confidence: {confidence:.1%}")
-            
-            # Execute mapped action
-            if self.action_mapper:
-                action_success = self.action_mapper.execute_action(gesture_name)
-                if action_success:
-                    self.action_label.setText(f"Action: Executed for {gesture_name}")
-                else:
-                    self.action_label.setText(f"Action: No mapping for {gesture_name}")
-            
-            # Show action overlay
-            if self.config.get("ui", {}).get("overlay_feedback", True):
-                action_text = "No action mapped"
-                if self.action_mapper and gesture_name in self.action_mapper.current_profile:
-                    action_text = self.action_mapper.current_profile[gesture_name]
-                self.action_overlay.show_action(gesture_name, action_text)
+            self.last_detected_gesture = gesture_name
+            self.last_gesture_confidence = confidence
+    
+    def on_frame_update(self):
+        """Handler for frame update events from GestureManager"""
+        # This is called automatically by the gesture manager
+        # We already update the UI in the timer-based update_frame method
+        pass
+    
+    def on_action_executed(self, gesture, action, description):
+        """Handler for action executed events from GestureManager"""
+        self.action_label.setText(f"Action: {description}")
+        
+        # Show action overlay
+        if self.config.get("ui", {}).get("overlay_feedback", True):
+            self.action_overlay.show_action(gesture, description)
     
     @pyqtSlot(str)
     def _change_profile(self, profile_name):
         """Change the active gesture profile"""
-        if self.action_mapper:
-            success = self.action_mapper.set_profile(profile_name)
+        if self.gesture_manager:
+            success = self.gesture_manager.set_profile(profile_name)
             if success:
                 self.statusBar.showMessage(f"Switched to profile: {profile_name}")
             else:
@@ -460,11 +454,22 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_model_trained(self, profile_name):
         """Handle model trained signal from gesture trainer"""
-        # Reload the gesture detector with the newly trained model
-        if self.gesture_detector:
-            # In a real implementation, we would reinitialize the detector or classifier
-            # Here we'll just show a message
-            self.statusBar.showMessage(f"Model trained for profile: {profile_name}")
+        # Reload the gesture manager to apply the new model
+        if self.detection_active:
+            was_active = True
+            self.toggle_detection()  # Stop detection
+        else:
+            was_active = False
+        
+        # Reset gesture manager to reload with new models
+        self.gesture_manager = None
+        
+        # Restart detection if it was active
+        if was_active:
+            self._init_gesture_manager()
+            self.toggle_detection()
+        
+        self.statusBar.showMessage(f"Model trained for profile: {profile_name}")
     
     @pyqtSlot()
     def _on_settings_changed(self):
@@ -479,15 +484,13 @@ class MainWindow(QMainWindow):
         else:
             was_active = False
         
-        # Reinitialize components with new settings
-        self.camera_manager = None
-        self.gesture_detector = None
-        self.action_mapper = None
-        self.gesture_classifier = None
+        # Reset gesture manager to reload with new settings
+        self.gesture_manager = None
         
         # Restart detection if it was active
         if was_active:
-            self.toggle_detection()  # Start detection with new settings
+            self._init_gesture_manager()
+            self.toggle_detection()
         
         self.statusBar.showMessage("Settings applied")
     
@@ -586,6 +589,10 @@ class MainWindow(QMainWindow):
             # Stop detection if active
             if self.detection_active:
                 self.toggle_detection()
+            
+            # Clean up gesture manager
+            if self.gesture_manager:
+                self.gesture_manager.stop_processing()
             
             # Close the application
             event.accept()

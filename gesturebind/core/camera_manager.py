@@ -56,24 +56,53 @@ class CameraManager:
             return True
         
         try:
-            # Initialize the capture
-            self.cap = cv2.VideoCapture(self.device_id)
+            # Try to find a working camera if the default one doesn't work
+            camera_indices_to_try = [self.device_id]
             
-            # Check if camera opened successfully
-            if not self.cap.isOpened():
-                logger.error(f"Failed to open camera device {self.device_id}")
-                return False
+            # Add some common indices to try if the default fails
+            if self.device_id != 0:
+                camera_indices_to_try.append(0)  # Try default camera
             
-            # Set camera properties
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+            # Also try other common indices
+            for idx in [1, 2, -1]:  # -1 is often used for default camera on some systems
+                if idx not in camera_indices_to_try:
+                    camera_indices_to_try.append(idx)
             
-            # Read a test frame to verify capture works
-            ret, frame = self.cap.read()
-            if not ret:
-                logger.error("Failed to read frame from camera")
-                self.cap.release()
+            # Try each camera index until one works
+            success = False
+            for cam_idx in camera_indices_to_try:
+                logger.info(f"Trying to open camera with index {cam_idx}")
+                
+                # Initialize the capture
+                self.cap = cv2.VideoCapture(cam_idx)
+                
+                # Check if camera opened successfully
+                if not self.cap.isOpened():
+                    logger.warning(f"Failed to open camera device {cam_idx}")
+                    continue
+                
+                # Set camera properties
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+                
+                # Read a test frame to verify capture works
+                ret, frame = self.cap.read()
+                if not ret:
+                    logger.warning(f"Failed to read frame from camera {cam_idx}")
+                    self.cap.release()
+                    continue
+                
+                # This camera works, update the device ID and break the loop
+                self.device_id = cam_idx
+                success = True
+                break
+            
+            if not success:
+                logger.error("Could not find any working camera")
+                if self.cap:
+                    self.cap.release()
+                    self.cap = None
                 return False
                 
             # Get actual camera properties
@@ -81,7 +110,7 @@ class CameraManager:
             actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = int(self.cap.get(cv2.CAP_PROP_FPS))
             
-            logger.info(f"Camera started: {actual_width}x{actual_height} @ {actual_fps}fps")
+            logger.info(f"Camera {self.device_id} started: {actual_width}x{actual_height} @ {actual_fps}fps")
             
             # Start the capture thread
             self.running = True
@@ -162,16 +191,16 @@ class CameraManager:
         Get the most recent camera frame.
         
         Returns:
-            numpy.ndarray: The current camera frame or None if no frame is available
+            tuple: (success, frame) where success is a boolean and frame is the camera frame
         """
-        if not self.running:
-            return None
+        if not self.running or self.cap is None:
+            return False, None
         
         with self.lock:
             if self.current_frame is not None:
-                return self.current_frame.copy()
+                return True, self.current_frame.copy()
         
-        return None
+        return False, None
     
     def get_device_list(self):
         """
