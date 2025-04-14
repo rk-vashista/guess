@@ -1286,9 +1286,15 @@ class GestureTrainer(QWidget):
         # Update the UI
         self._update_gesture_details(None)
         
-        # Update config
-        self.config["actions"]["default_profile"] = profile_name
-        self.config_manager.save_config()  # Removed the config parameter
+        # Update config safely
+        if "actions" in self.config:
+            if isinstance(self.config["actions"], dict):
+                self.config["actions"]["default_profile"] = profile_name
+                self.config_manager.save_config() # Save the updated config
+            else:
+                logger.warning("Config structure issue: 'actions' is not a dictionary. Cannot update default profile.")
+        else:
+            logger.warning("Config structure issue: 'actions' key missing. Cannot update default profile.")
     
     @pyqtSlot(QListWidgetItem, QListWidgetItem)
     def _gesture_selected(self, current, previous):

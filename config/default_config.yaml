@@ -1,0 +1,39 @@
+actions:
+  default_profile: default
+  enable_shortcuts: true
+app:
+  save_user_data_path: ~/gesturebind/data
+  version: 1.0.0
+camera:
+  device_id: 0
+  fps: 30
+  height: 480
+  width: 640
+detection:
+  confidence_threshold: 0.7
+  cooldown_ms: 500
+  engine: mediapipe
+  min_detection_duration_ms: 200
+profiles:
+  default:
+    fist: keyboard:escape
+    open_palm: keyboard:space
+    peace_sign: media:play_pause
+    pointing: mouse:mouse_click
+  media:
+    fist: media:mute
+    open_palm: media:play_pause
+    thumbs_down: media:volume_down
+    thumbs_up: media:volume_up
+  presentation:
+    open_palm: keyboard:f5
+    pointing_left: keyboard:left
+    pointing_right: keyboard:right
+ui:
+  minimize_to_tray: true
+  overlay_feedback: true
+  overlay_timeout_ms: 1500
+  show_fps: true
+  show_preview: true
+  start_minimized: false
+  theme: system

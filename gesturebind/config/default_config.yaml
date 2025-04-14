@@ -2,8 +2,9 @@
 
 app:
   version: "1.0.0"
-  save_user_data_path: "~/gesturebind/data"
+  save_user_data_path: "./data"
   log_level: "info"
+  trained_gestures_path: "./data/gestures"  # Path relative to workspace
 
 camera:
   device_id: 0
@@ -47,33 +48,19 @@ actions:
 
 profiles:
   default:
-    open_palm: "keyboard:space"
-    fist: "keyboard:escape"
-    pointing: "mouse:mouse_click"
-    peace_sign: "media:play_pause"
-    thumbs_up: "keyboard:page_down"
-    thumbs_down: "keyboard:page_up"
+    gesture_mappings: {}  # Empty default profile - use trained gestures instead of predefined ones
   
   media:
-    open_palm: "media:play_pause"
-    fist: "media:mute"
-    thumbs_up: "media:volume_up"
-    thumbs_down: "media:volume_down"
-    pointing_right: "media:next_track"
-    pointing_left: "media:previous_track"
+    gesture_mappings: {}  # Empty media profile
   
   presentation:
-    pointing_right: "keyboard:right"
-    pointing_left: "keyboard:left"
-    open_palm: "keyboard:f5"
-    fist: "keyboard:escape"
-    peace_sign: "keyboard:b"  # Black screen in most presentation tools
+    gesture_mappings: {}  # Empty presentation profile
 
 # Advanced settings (for developers and power users)
 advanced:
   debug_mode: false
-  gesture_data_folder: "~/gesturebind/data/gestures"
-  model_folder: "~/gesturebind/data/models"
+  gesture_data_folder: "./data/gestures"
+  model_folder: "./data/models"
   max_log_files: 10
   max_log_size_mb: 5
   landmark_smoothing: true    # Apply smoothing to landmarks for more stable detection
@@ -82,5 +69,5 @@ advanced:
 
 # Paths for models and data
 paths:
-  model_folder: "~/gesturebind/data/models"
-  gesture_data_folder: "~/gesturebind/data/gestures"
+  model_folder: "./data/models"
+  gesture_data_folder: "./data/gestures"

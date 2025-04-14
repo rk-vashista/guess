@@ -10,7 +10,33 @@ import logging
 import json
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# Import path_manager functions for consistent path handling
+try:
+    from utils.path_manager import get_workspace_root, resolve_path, get_data_dir
+    logger = logging.getLogger(__name__)
+    logger.info("Successfully imported path_manager for ConfigManager")
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("Couldn't import path_manager, using default paths")
+    # Basic default implementation if path_manager is not available
+    def get_workspace_root():
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    
+    def resolve_path(path, create_if_missing=False):
+        if os.path.isabs(path):
+            return path
+        return os.path.join(get_workspace_root(), path)
+    
+    def get_data_dir(subdir=None, create=True):
+        workspace_root = get_workspace_root()
+        if subdir:
+            path = os.path.join(workspace_root, "gesturebind", "data", subdir)
+        else:
+            path = os.path.join(workspace_root, "gesturebind", "data")
+        
+        if create and not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+        return path
 
 class ConfigManager:
     """
@@ -24,9 +50,12 @@ class ConfigManager:
         Args:
             config_path (str): Path to the configuration file
         """
-        self.config_path = config_path
+        # Use path_manager's resolve_path to ensure consistent path resolution
+        self.config_path = resolve_path(config_path)
         self.config = {}
-        self.user_config_dir = Path.home() / ".gesturebind"
+        
+        # Use a path within the workspace for user config instead of ~/.gesturebind
+        self.user_config_dir = Path(get_data_dir("config", create=True))
         self.user_config_path = self.user_config_dir / "user_config.yaml"
         
         # Ensure user config directory exists

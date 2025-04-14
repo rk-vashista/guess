@@ -1,7 +1,5 @@
 """
-Main window UI module for GestureBind.
-
-This module provides the primary application window and interface.
+Main window UI module for GestureBind application
 """
 
 import os
@@ -16,6 +14,21 @@ from PyQt5.QtWidgets import (QMainWindow, QAction, QTabWidget, QWidget,
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 
+# Fix imports by adding the project root to sys.path if necessary
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Import path_manager functions for consistent path handling
+try:
+    from utils.path_manager import get_workspace_root, resolve_path, get_data_dir
+    logger = logging.getLogger(__name__)
+    logger.info("Successfully imported path_manager for MainWindow")
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("Couldn't import path_manager, using default paths")
+
+# Use direct imports instead of relative imports
 from core.gesture_manager import GestureManager  # Import the new GestureManager class
 from ui.gesture_trainer import GestureTrainer
 from ui.settings_panel import SettingsPanel

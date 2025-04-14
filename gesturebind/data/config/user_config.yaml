@@ -1,0 +1,69 @@
+actions:
+  default_profile: default
+  enable_shortcuts: true
+  gesture_trigger_mode: single
+advanced:
+  debug_mode: false
+  gesture_data_folder: ./data/gestures
+  landmark_smoothing: true
+  max_log_files: 10
+  max_log_size_mb: 5
+  model_folder: ./data/models
+  smoothing_factor: 0.5
+  smoothing_window: 3
+app:
+  launch_at_startup: false
+  log_level: info
+  save_user_data_path: ./data
+  trained_gestures_path: ./data/gestures
+  version: 1.0.0
+camera:
+  device_id: 0
+  flip_horizontal: true
+  fps: 30
+  height: 480
+  width: 640
+detection:
+  confidence_threshold: 0.7
+  cooldown_ms: 500
+  cooldown_seconds: 1.0
+  detection_area:
+    bottom: 0.9
+    left: 0.1
+    right: 0.9
+    top: 0.1
+  engine: mediapipe
+  min_detection_duration_ms: 200
+paths:
+  gesture_data_folder: ./data/gestures
+  model_folder: ./data/models
+preprocessing:
+  resize_frame: false
+  resize_height: 240
+  resize_width: 320
+  roi_height: 280
+  roi_width: 440
+  roi_x: 100
+  roi_y: 100
+  use_grayscale: false
+  use_roi: false
+profiles:
+  default:
+    gesture_mappings:
+      peace:
+        data: ctrl+l
+        description: 'Hotkey: ctrl+l'
+        type: hotkey
+  media:
+    gesture_mappings: {}
+  presentation:
+    gesture_mappings: {}
+ui:
+  camera_preview_fps: 15
+  minimize_to_tray: true
+  overlay_feedback: true
+  overlay_timeout_ms: 1500
+  show_fps: true
+  show_preview: true
+  start_minimized: false
+  theme: system

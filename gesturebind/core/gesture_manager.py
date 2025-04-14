@@ -10,6 +10,7 @@ import threading
 import time
 from typing import List, Tuple, Dict, Any, Optional, Callable
 
+# Fix imports to use direct imports rather than namespace package imports
 from core.camera_manager import CameraManager
 from core.gesture_detector import GestureDetector
 from core.action_mapper import ActionMapper
