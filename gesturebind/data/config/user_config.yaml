@@ -58,7 +58,7 @@ profiles:
         data:
           command: flatpak run com.spotify.Client
           terminal: false
-        description: mission
+        description: Spotify
         type: shell_command
   media:
     gesture_mappings: {}
