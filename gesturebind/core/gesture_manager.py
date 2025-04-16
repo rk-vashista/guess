@@ -82,6 +82,22 @@ class GestureManager:
             logger.error(f"Error initializing GestureManager components: {e}")
             raise
     
+    def get_camera_status(self):
+        """
+        Get the current status of the camera.
+        
+        Returns:
+            dict: Camera status information
+        """
+        if not hasattr(self, 'camera_manager') or self.camera_manager is None:
+            return {
+                "running": False,
+                "has_error": True,
+                "error_message": "Camera manager not initialized"
+            }
+        
+        return self.camera_manager.get_status()
+    
     def register_observer(self, observer):
         """
         Register an observer to receive gesture events.
@@ -113,9 +129,16 @@ class GestureManager:
             return True
         
         try:
-            # Start camera capture directly (no initialize method needed)
+            # Check camera availability before starting
+            camera_available, error_msg = self.camera_manager.check_camera_availability()
+            if not camera_available:
+                logger.error(f"Cannot start processing: {error_msg}")
+                return False
+                
+            # Start camera capture directly
             if not self.camera_manager.start_capture():
-                logger.error("Failed to start camera capture")
+                camera_status = self.camera_manager.get_status()
+                logger.error(f"Failed to start camera capture: {camera_status.get('error_message', 'Unknown error')}")
                 return False
             
             # Start processing thread

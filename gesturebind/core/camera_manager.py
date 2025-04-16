@@ -9,6 +9,8 @@ import threading
 import time
 import logging
 import numpy as np
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +43,45 @@ class CameraManager:
         self.thread = None
         self.lock = threading.Lock()
         self.current_frame = None
+        self.last_error = None
         
         logger.info(f"Camera manager initialized for device {self.device_id}")
+    
+    def check_camera_availability(self):
+        """
+        Check if the camera is available before attempting to start capture.
+        
+        Returns:
+            tuple: (bool, str) - (is_available, error_message)
+        """
+        try:
+            # Get list of available cameras
+            available_devices = self.get_device_list()
+            
+            if not available_devices:
+                return False, "No camera devices detected on this system"
+                
+            if self.device_id not in available_devices:
+                available_str = ", ".join(map(str, available_devices))
+                return False, f"Camera ID {self.device_id} not found. Available devices: {available_str}"
+            
+            # Try to open the camera briefly to check if it works
+            test_cap = cv2.VideoCapture(self.device_id)
+            if not test_cap.isOpened():
+                return False, f"Camera {self.device_id} cannot be opened (may be in use by another application)"
+                
+            # Read a test frame
+            ret, _ = test_cap.read()
+            test_cap.release()
+            
+            if not ret:
+                return False, f"Camera {self.device_id} opened but failed to read a frame"
+                
+            return True, "Camera is available"
+            
+        except Exception as e:
+            logger.error(f"Error checking camera availability: {e}")
+            return False, f"Error checking camera: {str(e)}"
     
     def start_capture(self):
         """
@@ -56,6 +95,16 @@ class CameraManager:
             return True
         
         try:
+            # Clear any previous errors
+            self.last_error = None
+            
+            # Check camera availability first
+            is_available, error_msg = self.check_camera_availability()
+            if not is_available:
+                self.last_error = error_msg
+                logger.error(f"Camera not available: {error_msg}")
+                return False
+            
             # Try to find a working camera if the default one doesn't work
             camera_indices_to_try = [self.device_id]
             
@@ -99,7 +148,9 @@ class CameraManager:
                 break
             
             if not success:
-                logger.error("Could not find any working camera")
+                error_msg = "Could not find any working camera"
+                self.last_error = error_msg
+                logger.error(error_msg)
                 if self.cap:
                     self.cap.release()
                     self.cap = None
@@ -121,7 +172,9 @@ class CameraManager:
             return True
             
         except Exception as e:
-            logger.error(f"Error starting camera capture: {e}")
+            error_msg = f"Error starting camera capture: {e}"
+            self.last_error = error_msg
+            logger.error(error_msg)
             if self.cap is not None:
                 self.cap.release()
                 self.cap = None
@@ -219,6 +272,30 @@ class CameraManager:
                 cap.release()
         
         return available_devices
+    
+    def get_status(self):
+        """
+        Get the current status of the camera.
+        
+        Returns:
+            dict: Status information including running state and errors
+        """
+        status = {
+            "running": self.running,
+            "device_id": self.device_id,
+            "has_error": self.last_error is not None,
+            "error_message": self.last_error,
+        }
+        
+        # Add additional info if camera is running
+        if self.running and self.cap is not None:
+            status.update({
+                "width": int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                "height": int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                "fps": int(self.cap.get(cv2.CAP_PROP_FPS)),
+            })
+        
+        return status
     
     def __del__(self):
         """Clean up resources when the object is destroyed"""
