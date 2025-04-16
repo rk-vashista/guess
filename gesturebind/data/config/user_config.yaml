@@ -56,7 +56,7 @@ profiles:
         type: hotkey
       thumb:
         data:
-          command: flatpak run io.missioncenter.MissionCenter
+          command: flatpak run com.spotify.Client
           terminal: false
         description: mission
         type: shell_command
