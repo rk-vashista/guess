@@ -7,6 +7,7 @@ This module provides the settings configuration interface.
 import os
 import sys
 import logging
+import platform
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QSlider,
                            QGroupBox, QFormLayout, QTabWidget, QCheckBox,
@@ -14,6 +15,19 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QHeaderView, QDialog, QLineEdit, QDialogButtonBox, QInputDialog)
 from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QObject, QEvent
 from PyQt5.QtGui import QKeySequence
+
+# Determine the operating system for platform-specific UI labels
+PLATFORM = platform.system()
+# Set appropriate name for the "Super" key based on platform
+if PLATFORM == "Windows":
+    SUPER_KEY_NAME = "Win"
+    SUPER_KEY_INTERNAL = "win"
+elif PLATFORM == "Darwin":  # macOS
+    SUPER_KEY_NAME = "Command"
+    SUPER_KEY_INTERNAL = "cmd"
+else:  # Linux and others
+    SUPER_KEY_NAME = "Super"
+    SUPER_KEY_INTERNAL = "super"
 
 # Fix imports by adding the project root to sys.path if necessary
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -485,6 +499,7 @@ class SettingsPanel(QWidget):
         action_type_combo.addItem("Hotkey Combination", "hotkey")
         action_type_combo.addItem("Mouse Click", "mouse_click")
         action_type_combo.addItem("Launch Application", "launch_app")
+        action_type_combo.addItem("Shell Command", "shell_command")  # Add shell command option
         form.addRow("Action Type:", action_type_combo)
         
         # Create a stacked layout for different action data inputs
@@ -521,6 +536,23 @@ class SettingsPanel(QWidget):
         app_layout.addWidget(browse_button)
         input_stack.addWidget(app_widget)
         
+        # 4. Shell command input
+        shell_widget = QWidget()
+        shell_layout = QVBoxLayout(shell_widget)
+        
+        shell_command_edit = QLineEdit()
+        shell_command_edit.setPlaceholderText("Enter shell command...")
+        shell_layout.addWidget(shell_command_edit)
+        
+        shell_hint = QLabel("Example: ls -la or python script.py")
+        shell_hint.setStyleSheet("color: gray; font-style: italic;")
+        shell_layout.addWidget(shell_hint)
+        
+        run_in_terminal_check = QCheckBox("Run in terminal window")
+        shell_layout.addWidget(run_in_terminal_check)
+        
+        input_stack.addWidget(shell_widget)
+        
         # Create wrapper widget for the stack
         stack_widget = QWidget()
         stack_widget.setLayout(input_stack)
@@ -546,6 +578,8 @@ class SettingsPanel(QWidget):
                 input_stack.setCurrentIndex(1)  # Mouse selection
             elif action_type == "launch_app":
                 input_stack.setCurrentIndex(2)  # App launcher
+            elif action_type == "shell_command":
+                input_stack.setCurrentIndex(3)  # Shell command input
         
         # Connect the action type change to stack update
         action_type_combo.currentIndexChanged.connect(update_action_input)
@@ -573,6 +607,11 @@ class SettingsPanel(QWidget):
                 }
             elif action_type == "launch_app":
                 action_data = app_path_edit.text()
+            elif action_type == "shell_command":
+                action_data = {
+                    "command": shell_command_edit.text(),
+                    "terminal": run_in_terminal_check.isChecked()
+                }
             else:
                 action_data = ""
                 
@@ -588,6 +627,12 @@ class SettingsPanel(QWidget):
                     import os
                     app_name = os.path.basename(action_data)
                     description = f"Launch: {app_name}"
+                elif action_type == "shell_command":
+                    command_text = shell_command_edit.text()
+                    # Truncate long commands for display
+                    if len(command_text) > 30:
+                        command_text = command_text[:27] + "..."
+                    description = f"Command: {command_text}"
             
             # Add mapping to configuration
             if "profiles" not in self.config:
@@ -669,6 +714,7 @@ class SettingsPanel(QWidget):
         action_type_combo.addItem("Hotkey Combination", "hotkey")
         action_type_combo.addItem("Mouse Click", "mouse_click")
         action_type_combo.addItem("Launch Application", "launch_app")
+        action_type_combo.addItem("Shell Command", "shell_command")  # Add shell command option
         
         # Set current action type
         current_action_type = mapping_data.get("type", "keypress")
@@ -732,6 +778,28 @@ class SettingsPanel(QWidget):
         app_layout.addWidget(browse_button)
         input_stack.addWidget(app_widget)
         
+        # 4. Shell command input
+        shell_widget = QWidget()
+        shell_layout = QVBoxLayout(shell_widget)
+        
+        shell_command_edit = QLineEdit()
+        shell_command_edit.setPlaceholderText("Enter shell command...")
+        shell_layout.addWidget(shell_command_edit)
+        
+        shell_hint = QLabel("Example: ls -la or python script.py")
+        shell_hint.setStyleSheet("color: gray; font-style: italic;")
+        shell_layout.addWidget(shell_hint)
+        
+        run_in_terminal_check = QCheckBox("Run in terminal window")
+        shell_layout.addWidget(run_in_terminal_check)
+        
+        input_stack.addWidget(shell_widget)
+        
+        # Set current shell command if applicable
+        if current_action_type == "shell_command" and isinstance(mapping_data.get("data"), dict):
+            shell_command_edit.setText(mapping_data["data"].get("command", ""))
+            run_in_terminal_check.setChecked(mapping_data["data"].get("terminal", False))
+        
         # Create wrapper widget for the stack
         stack_widget = QWidget()
         stack_widget.setLayout(input_stack)
@@ -757,6 +825,8 @@ class SettingsPanel(QWidget):
                 input_stack.setCurrentIndex(1)  # Mouse selection
             elif action_type == "launch_app":
                 input_stack.setCurrentIndex(2)  # App launcher
+            elif action_type == "shell_command":
+                input_stack.setCurrentIndex(3)  # Shell command input
         
         # Connect the action type change to stack update
         action_type_combo.currentIndexChanged.connect(update_action_input)
@@ -782,6 +852,11 @@ class SettingsPanel(QWidget):
                 }
             elif action_type == "launch_app":
                 action_data = app_path_edit.text()
+            elif action_type == "shell_command":
+                action_data = {
+                    "command": shell_command_edit.text(),
+                    "terminal": run_in_terminal_check.isChecked()
+                }
             else:
                 action_data = ""
             
@@ -797,6 +872,12 @@ class SettingsPanel(QWidget):
                     import os
                     app_name = os.path.basename(action_data)
                     description = f"Launch: {app_name}"
+                elif action_type == "shell_command":
+                    command_text = shell_command_edit.text()
+                    # Truncate long commands for display
+                    if len(command_text) > 30:
+                        command_text = command_text[:27] + "..."
+                    description = f"Command: {command_text}"
             
             # Prepare and store the updated action configuration
             action_config = {
@@ -1159,12 +1240,39 @@ class SettingsPanel(QWidget):
         confirm = QMessageBox.question(
             self,
             "Confirm Reset",
-            "Are you sure you want to reset all settings to their default values?",
+            "Are you sure you want to reset all settings to their default values? This will also delete all custom gestures.",
             QMessageBox.Yes | QMessageBox.No
         )
         
         if confirm == QMessageBox.Yes:
             try:
+                # First delete all gesture data
+                gesture_data_file = get_data_dir("default") + "/gesture_data.json"
+                model_files_to_delete = []
+                
+                # Find model files for all profiles
+                models_dir = get_data_dir("models")
+                if os.path.exists(models_dir):
+                    for filename in os.listdir(models_dir):
+                        if filename.startswith("gesture_"):
+                            model_files_to_delete.append(os.path.join(models_dir, filename))
+                
+                # Delete gesture data file
+                if os.path.exists(gesture_data_file):
+                    try:
+                        os.remove(gesture_data_file)
+                        logger.info(f"Deleted gesture data file: {gesture_data_file}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete gesture data file: {e}")
+                
+                # Delete model files
+                for file_path in model_files_to_delete:
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"Deleted model file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete model file: {e}")
+                
                 # Reset configuration
                 self.config = self.config_manager.reset_to_default()
                 
@@ -1177,7 +1285,7 @@ class SettingsPanel(QWidget):
                 QMessageBox.information(
                     self,
                     "Settings Reset",
-                    "Settings have been reset to defaults."
+                    "Settings have been reset to defaults and all gesture data has been cleared."
                 )
                 
             except Exception as e:
@@ -1187,7 +1295,7 @@ class SettingsPanel(QWidget):
                     "Settings Error",
                     f"Failed to reset settings: {str(e)}"
                 )
-    
+
     @pyqtSlot()
     def _change_data_path(self):
         """Change the user data directory"""
@@ -1366,7 +1474,7 @@ class SettingsPanel(QWidget):
 
     def _create_key_capture_widget(self, initial_value=""):
         """
-        Create a widget that can capture keyboard input for hotkey binding
+        Create a widget that can capture keyboard input for sequential key combinations
         
         Args:
             initial_value: Initial text to display
@@ -1375,62 +1483,325 @@ class SettingsPanel(QWidget):
             Tuple of (layout, line_edit) containing the widget layout and the line edit where the key is stored
         """
         from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QFrame, QGridLayout, QStackedWidget
         
-        # Create layout for the capture widget
-        capture_layout = QHBoxLayout()
+        # Create main layout for the key capture widget
+        main_layout = QVBoxLayout()
         
-        # Create key capture line edit
-        key_edit = QLineEdit(initial_value)
-        key_edit.setPlaceholderText("Press keys to capture...")
-        key_edit.setReadOnly(True)  # This is important - we don't want normal text editing
+        # Create the container for the key sequence (key slots)
+        key_sequence_layout = QHBoxLayout()
         
-        # Add a clear button
-        clear_button = QPushButton("Clear")
+        # Create fields for up to 3 keys in the sequence
+        key_slots = []
+        key_combos = []
         
-        # When clear is clicked, reset the line edit
-        clear_button.clicked.connect(lambda: key_edit.setText(""))
+        # Tracking the active key slot and whether we're waiting for a keypress
+        self.active_key_slot = 0
+        self.waiting_for_keypress = False
         
-        # Add widgets to layout
-        capture_layout.addWidget(key_edit, 1)  # 1 = stretch factor to use available space
-        capture_layout.addWidget(clear_button)
+        # Create a readable representation of key sequence for storage
+        key_sequence_edit = QLineEdit(initial_value)
+        key_sequence_edit.setReadOnly(True)
+        key_sequence_edit.setVisible(False)  # Hidden storage field
         
-        # Custom event filter class to capture key presses
-        class KeyCaptureFilter(QObject):
-            def __init__(self, parent=None):
-                super().__init__(parent)
-                self.keys_pressed = set()
+        # Parse initial value into key slots if provided
+        initial_keys = []
+        if initial_value:
+            initial_keys = initial_value.split("+")
+        
+        # Label to show instructions
+        instructions_label = QLabel("Select or press the keys in sequence")
+        instructions_label.setAlignment(Qt.AlignCenter)
+        instructions_label.setStyleSheet("font-style: italic;")
+        main_layout.addWidget(instructions_label)
+        
+        # Function to update the full key sequence from individual slots
+        def update_key_sequence():
+            keys = []
+            for slot in key_slots:
+                if slot.text() and slot.text() != "Press Key...":
+                    keys.append(slot.text())
+            key_sequence_edit.setText("+".join(keys))
+        
+        # Function to select next key slot
+        def select_next_slot(current_index):
+            if current_index < len(key_slots) - 1:
+                activate_slot(current_index + 1)
+                return True
+            return False
+        
+        # Function to activate a specific slot
+        def activate_slot(index):
+            nonlocal self
+            if index < 0 or index >= len(key_slots):
+                return
                 
+            self.active_key_slot = index
+            self.waiting_for_keypress = True
+            
+            # Update styling for all slots
+            for i, slot in enumerate(key_slots):
+                if i == index:
+                    slot.setStyleSheet("background-color: #e0f0ff; border: 2px solid #3399ff; padding: 4px;")
+                    slot.setText("Press Key..." if not slot.text() or slot.text() == "Press Key..." else slot.text())
+                else:
+                    if slot.text() and slot.text() != "Press Key...":
+                        slot.setStyleSheet("background-color: #f0f0f0; border: 1px solid #cccccc; padding: 4px;")
+                    else:
+                        slot.setStyleSheet("background-color: #f8f8f8; border: 1px dashed #cccccc; padding: 4px;")
+            
+            # Set focus to the active slot to capture keypresses
+            key_slots[index].setFocus()
+            
+            # Update the instruction label
+            if index == 0:
+                instructions_label.setText("Select first key (required)")
+            elif index == 1:
+                instructions_label.setText("Select second key (required)")
+            else:
+                instructions_label.setText("Select third key (optional)")
+        
+        # Create the key slots
+        for i in range(3):  # 3 key slots
+            key_frame = QFrame()
+            key_frame.setFrameShape(QFrame.StyledPanel)
+            key_frame.setMinimumWidth(120)
+            key_frame.setMinimumHeight(30)
+            
+            # Layout for this key slot
+            slot_layout = QVBoxLayout(key_frame)
+            slot_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Label for this key
+            key_label = QLabel(f"Key {i+1}")
+            key_label.setAlignment(Qt.AlignCenter)
+            
+            # Text field for the key
+            key_edit = QLineEdit()
+            key_edit.setReadOnly(True)
+            key_edit.setAlignment(Qt.AlignCenter)
+            
+            # Set initial value if available
+            if i < len(initial_keys):
+                key_edit.setText(initial_keys[i])
+            else:
+                key_edit.setText("Press Key..." if i <= 1 else "")  # First two keys required
+            
+            # Create special key dropdown for this slot
+            special_keys_combo = QComboBox()
+            special_keys_combo.addItem("Select special key...", None)
+            special_keys_combo.addItem("Ctrl", "ctrl")
+            special_keys_combo.addItem("Shift", "shift")
+            special_keys_combo.addItem("Alt", "alt")
+            special_keys_combo.addItem(SUPER_KEY_NAME, SUPER_KEY_INTERNAL)  # Platform-specific Super key name
+            special_keys_combo.addItem("F1", "f1")
+            special_keys_combo.addItem("F2", "f2")
+            special_keys_combo.addItem("F3", "f3")
+            special_keys_combo.addItem("F4", "f4")
+            special_keys_combo.addItem("F5", "f5")
+            special_keys_combo.addItem("F6", "f6")
+            special_keys_combo.addItem("F7", "f7")
+            special_keys_combo.addItem("F8", "f8")
+            special_keys_combo.addItem("F9", "f9")
+            special_keys_combo.addItem("F10", "f10")
+            special_keys_combo.addItem("F11", "f11")
+            special_keys_combo.addItem("F12", "f12")
+            special_keys_combo.addItem("Esc", "esc")
+            special_keys_combo.addItem("Tab", "tab")
+            special_keys_combo.addItem("Backspace", "backspace")
+            special_keys_combo.addItem("Enter", "enter")
+            special_keys_combo.addItem("Space", "space")
+            special_keys_combo.addItem("Delete", "delete")
+            special_keys_combo.addItem("Home", "home")
+            special_keys_combo.addItem("End", "end")
+            special_keys_combo.addItem("PageUp", "pageup")
+            special_keys_combo.addItem("PageDown", "pagedown")
+            special_keys_combo.addItem("Left", "left")
+            special_keys_combo.addItem("Right", "right")
+            special_keys_combo.addItem("Up", "up")
+            special_keys_combo.addItem("Down", "down")
+            
+            # Function to handle dropdown selection for this slot
+            def create_special_key_handler(slot_index):
+                def handle_special_key(index):
+                    if index == 0:  # "Select special key..." option
+                        return
+                        
+                    special_key = key_combos[slot_index].currentData()
+                    key_slots[slot_index].setText(special_key)
+                    key_combos[slot_index].setCurrentIndex(0)  # Reset dropdown
+                    update_key_sequence()
+                    
+                    # Move to next slot
+                    if not select_next_slot(slot_index):
+                        # If last slot, set focus back to the dialog
+                        key_slots[slot_index].clearFocus()
+                        
+                return handle_special_key
+            
+            special_keys_combo.currentIndexChanged.connect(create_special_key_handler(i))
+            key_combos.append(special_keys_combo)
+            
+            # Add key label and edit to the slot layout
+            slot_layout.addWidget(key_label)
+            slot_layout.addWidget(key_edit)
+            slot_layout.addWidget(special_keys_combo)
+            
+            # Store the key edit for later access
+            key_slots.append(key_edit)
+            
+            # Add frame to the sequence layout
+            key_sequence_layout.addWidget(key_frame)
+            
+            # Add connecting "+" label between key slots (except after the last one)
+            if i < 2:  # Only add plus sign between keys, not after the last one
+                plus_label = QLabel("+")
+                plus_label.setAlignment(Qt.AlignCenter)
+                plus_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+                key_sequence_layout.addWidget(plus_label)
+        
+        # Add key sequence layout to main layout
+        main_layout.addLayout(key_sequence_layout)
+        
+        # Controls layout (for clear button)
+        controls_layout = QHBoxLayout()
+        controls_layout.addStretch(1)
+        
+        # Clear button to reset all key slots
+        clear_button = QPushButton("Clear All")
+        clear_button.clicked.connect(lambda: self._clear_key_slots(key_slots, key_sequence_edit))
+        controls_layout.addWidget(clear_button)
+        
+        main_layout.addLayout(controls_layout)
+        
+        # Hidden final key sequence storage
+        main_layout.addWidget(key_sequence_edit)
+        
+        # Custom event filter to capture key presses for the active slot
+        class KeySequenceFilter(QObject):
+            def __init__(self, parent, key_slots, key_sequence_edit):
+                super().__init__(parent)
+                self.key_slots = key_slots
+                self.key_sequence_edit = key_sequence_edit
+                
+                # Dictionary mapping key constants to readable names - with platform-specific handling
+                self.key_map = {
+                    Qt.Key_Super_L: SUPER_KEY_INTERNAL,
+                    Qt.Key_Super_R: SUPER_KEY_INTERNAL,
+                    Qt.Key_Meta: SUPER_KEY_INTERNAL,
+                    Qt.Key_Alt: "alt",
+                    Qt.Key_AltGr: "alt",
+                    Qt.Key_Control: "ctrl",
+                    Qt.Key_Shift: "shift",
+                    Qt.Key_Escape: "esc",
+                    Qt.Key_Return: "enter",
+                    Qt.Key_Enter: "enter",
+                    Qt.Key_Tab: "tab",
+                    Qt.Key_Space: "space",
+                    Qt.Key_Backspace: "backspace",
+                    Qt.Key_Delete: "delete",
+                    Qt.Key_Home: "home",
+                    Qt.Key_End: "end",
+                    Qt.Key_PageUp: "pageup",
+                    Qt.Key_PageDown: "pagedown",
+                    Qt.Key_Left: "left",
+                    Qt.Key_Right: "right",
+                    Qt.Key_Up: "up",
+                    Qt.Key_Down: "down",
+                    Qt.Key_F1: "f1",
+                    Qt.Key_F2: "f2",
+                    Qt.Key_F3: "f3",
+                    Qt.Key_F4: "f4",
+                    Qt.Key_F5: "f5",
+                    Qt.Key_F6: "f6",
+                    Qt.Key_F7: "f7",
+                    Qt.Key_F8: "f8",
+                    Qt.Key_F9: "f9",
+                    Qt.Key_F10: "f10",
+                    Qt.Key_F11: "f11",
+                    Qt.Key_F12: "f12",
+                }
+                
+                # Add platform-specific mappings - important for macOS which has unique keys
+                if PLATFORM == "Darwin":  # macOS
+                    self.key_map[Qt.Key_Meta] = "cmd"
+                    self.key_map[Qt.Key_Control] = "ctrl"
+                    self.key_map[Qt.Key_Option] = "alt"
+                    self.key_map[Qt.Key_Command] = "cmd"
+            
             def eventFilter(self, obj, event):
+                if not self.parent().waiting_for_keypress:
+                    return False
+                    
                 if event.type() == QEvent.KeyPress:
-                    # Don't trigger on modifier keys alone
-                    if event.key() not in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
-                        # Get the key text
-                        key_text = QKeySequence(event.key()).toString()
-                        
-                        # Add modifiers if pressed
-                        modifiers = []
-                        if event.modifiers() & Qt.ControlModifier:
-                            modifiers.append("Ctrl")
-                        if event.modifiers() & Qt.ShiftModifier:
-                            modifiers.append("Shift")
-                        if event.modifiers() & Qt.AltModifier:
-                            modifiers.append("Alt")
-                        if event.modifiers() & Qt.MetaModifier:
-                            modifiers.append("Meta")
-                        
-                        # Format the hotkey text
-                        if modifiers:
-                            hotkey = "+".join(modifiers) + "+" + key_text
-                        else:
-                            hotkey = key_text
-                        
-                        # Update the line edit
-                        key_edit.setText(hotkey.lower())
+                    key = event.key()
+                    modifiers = event.modifiers()
+                    
+                    # Get the active slot index
+                    active_index = self.parent().active_key_slot
+                    
+                    # Skip if not a valid key or modifier key alone
+                    if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta, 
+                              Qt.Key_Super_L, Qt.Key_Super_R, Qt.Key_AltGr):
                         return True
+                    
+                    # Convert key to readable text
+                    if key in self.key_map:
+                        key_text = self.key_map[key]
+                    else:
+                        # For regular keys (letters, numbers, symbols)
+                        key_text = QKeySequence(key).toString().lower()
+                    
+                    # Log for debugging
+                    logger.debug(f"Key pressed: {key}, mapped to: {key_text}, modifiers: {modifiers}")
+                    
+                    # Update the active slot with the pressed key
+                    self.key_slots[active_index].setText(key_text)
+                    
+                    # Update the full key sequence
+                    update_key_sequence()
+                    
+                    # Move to the next slot if possible
+                    if not select_next_slot(active_index):
+                        # If we're at the last slot, clear focus
+                        self.key_slots[active_index].clearFocus()
+                    
+                    return True
+                
                 return False
         
-        # Create and install the event filter
-        key_filter = KeyCaptureFilter(key_edit)
-        key_edit.installEventFilter(key_filter)
+        # Create and install the event filter on each key slot
+        key_filter = KeySequenceFilter(self, key_slots, key_sequence_edit)
+        for slot in key_slots:
+            slot.installEventFilter(key_filter)
         
-        return capture_layout, key_edit
+        # Initialize the first slot as active
+        activate_slot(0)
+        
+        # Return the main layout and the hidden key sequence edit
+        return main_layout, key_sequence_edit
+        
+    @pyqtSlot()
+    def _clear_key_slots(self, key_slots, key_sequence_edit):
+        """Clear all key slots and reset the sequence"""
+        for i, slot in enumerate(key_slots):
+            if i <= 1:  # First two slots required
+                slot.setText("Press Key...")
+            else:
+                slot.setText("")  # Third slot optional
+        
+        key_sequence_edit.setText("")
+        
+        # Reactivate the first slot
+        self.active_key_slot = 0
+        self.waiting_for_keypress = True
+        
+        # Update styling
+        for i, slot in enumerate(key_slots):
+            if i == 0:
+                slot.setStyleSheet("background-color: #e0f0ff; border: 2px solid #3399ff; padding: 4px;")
+            else:
+                slot.setStyleSheet("background-color: #f8f8f8; border: 1px dashed #cccccc; padding: 4px;")
+        
+        # Set focus to the first slot
+        key_slots[0].setFocus()

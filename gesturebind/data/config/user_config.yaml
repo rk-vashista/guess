@@ -51,9 +51,13 @@ profiles:
   default:
     gesture_mappings:
       peace:
-        data: ctrl+v
-        description: 'Hotkey: ctrl+v'
+        data: Ctrl+V
+        description: 'Hotkey: super+d'
         type: hotkey
+      thumb:
+        data: /usr/bin/discord
+        description: 'Launch: discord'
+        type: launch_app
   media:
     gesture_mappings: {}
   presentation:
