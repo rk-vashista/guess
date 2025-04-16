@@ -55,9 +55,11 @@ profiles:
         description: 'Hotkey: super+d'
         type: hotkey
       thumb:
-        data: /usr/bin/discord
-        description: 'Launch: discord'
-        type: launch_app
+        data:
+          command: flatpak run io.missioncenter.MissionCenter
+          terminal: false
+        description: mission
+        type: shell_command
   media:
     gesture_mappings: {}
   presentation:

@@ -199,6 +199,9 @@ class ActionMapper:
             elif action_type == "system_command":
                 return self._execute_system_command(action_data)
                 
+            elif action_type == "shell_command":
+                return self._execute_shell_command(action_data)
+            
             else:
                 logger.warning(f"Unknown action type: {action_type}")
                 return False
@@ -385,6 +388,80 @@ class ActionMapper:
             return True
         except Exception as e:
             logger.error(f"Failed to execute system command: {e}")
+            return False
+    
+    def _execute_shell_command(self, action_data):
+        """
+        Execute a shell command with optional terminal window.
+        
+        Args:
+            action_data (dict): Dictionary containing command and terminal option
+                - command (str): Shell command to execute
+                - terminal (bool): Whether to run in a terminal window
+                
+        Returns:
+            bool: True if command executed successfully, False otherwise
+        """
+        # Handle both string and dictionary formats for backward compatibility
+        if isinstance(action_data, str):
+            command = action_data
+            terminal = False
+        else:
+            command = action_data.get("command", "")
+            terminal = action_data.get("terminal", False)
+        
+        logger.debug(f"Executing shell command: '{command}', terminal: {terminal}")
+        
+        if not command:
+            logger.error("No command provided")
+            return False
+        
+        try:
+            # Execute differently based on platform and terminal option
+            if terminal:
+                # Run command in a visible terminal window
+                if system == "Windows":
+                    # Windows: use cmd.exe
+                    subprocess.Popen(f'start cmd.exe /K "{command}"', shell=True)
+                elif system == "Darwin":  # macOS
+                    # macOS: use Terminal.app
+                    apple_script = f'tell application "Terminal" to do script "{command}"'
+                    subprocess.Popen(['osascript', '-e', apple_script])
+                else:
+                    # Linux: try to detect terminal emulator
+                    terminal_cmd = None
+                    # Check common terminal emulators
+                    for term in ["gnome-terminal", "konsole", "xterm", "terminator"]:
+                        if subprocess.call(['which', term], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
+                            terminal_cmd = term
+                            break
+                    
+                    if terminal_cmd:
+                        if terminal_cmd == "gnome-terminal":
+                            subprocess.Popen([terminal_cmd, "--", "bash", "-c", f"{command}; exec bash"])
+                        else:
+                            subprocess.Popen([terminal_cmd, "-e", f"bash -c '{command}; exec bash'"])
+                    else:
+                        # Fallback: run without terminal
+                        logger.warning("No terminal emulator found, running command in background")
+                        subprocess.Popen(command, shell=True)
+            else:
+                # Run command silently in background
+                if system == "Windows":
+                    # Hide console window on Windows
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    subprocess.Popen(command, shell=True, startupinfo=startupinfo)
+                else:
+                    # Standard execution for Unix-like systems
+                    subprocess.Popen(command, shell=True, 
+                                    stdout=subprocess.DEVNULL, 
+                                    stderr=subprocess.DEVNULL)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to execute shell command: {e}")
             return False
     
     def __del__(self):

@@ -540,23 +540,39 @@ class SettingsPanel(QWidget):
         shell_widget = QWidget()
         shell_layout = QVBoxLayout(shell_widget)
         
-        shell_command_edit = QLineEdit()
+        # Use QTextEdit instead of QLineEdit for better multi-line support
+        from PyQt5.QtWidgets import QTextEdit
+        shell_command_edit = QTextEdit()
         shell_command_edit.setPlaceholderText("Enter shell command...")
+        shell_command_edit.setMinimumHeight(100)  # Give more space for commands
+        shell_command_edit.setAcceptRichText(False)  # Plain text only
+        
+        # Set up for better copy/paste
+        shell_command_edit.setContextMenuPolicy(Qt.DefaultContextMenu)
         shell_layout.addWidget(shell_command_edit)
         
-        shell_hint = QLabel("Example: ls -la or python script.py")
-        shell_hint.setStyleSheet("color: gray; font-style: italic;")
-        shell_layout.addWidget(shell_hint)
+        # Instructions
+        paste_help = QLabel(f"Press Ctrl+V (or {SUPER_KEY_NAME}+V on Mac) to paste. Multi-line commands supported.")
+        paste_help.setStyleSheet("color: gray; font-style: italic; font-size: 9pt;")
+        shell_layout.addWidget(paste_help)
+        
+        # Add buttons for clipboard operations
+        clipboard_layout = QHBoxLayout()
+        
+        paste_button = QPushButton("Paste from Clipboard")
+        paste_button.clicked.connect(lambda: self._paste_to_text_edit(shell_command_edit))
+        clipboard_layout.addWidget(paste_button)
+        
+        clear_button = QPushButton("Clear")
+        clear_button.clicked.connect(lambda: shell_command_edit.clear())
+        clipboard_layout.addWidget(clear_button)
+        
+        shell_layout.addLayout(clipboard_layout)
         
         run_in_terminal_check = QCheckBox("Run in terminal window")
         shell_layout.addWidget(run_in_terminal_check)
         
         input_stack.addWidget(shell_widget)
-        
-        # Create wrapper widget for the stack
-        stack_widget = QWidget()
-        stack_widget.setLayout(input_stack)
-        form.addRow("Action Data:", stack_widget)
         
         # Action description
         description_edit = QLineEdit()
@@ -609,7 +625,7 @@ class SettingsPanel(QWidget):
                 action_data = app_path_edit.text()
             elif action_type == "shell_command":
                 action_data = {
-                    "command": shell_command_edit.text(),
+                    "command": shell_command_edit.toPlainText(),  # Use toPlainText() for QTextEdit
                     "terminal": run_in_terminal_check.isChecked()
                 }
             else:
@@ -628,11 +644,17 @@ class SettingsPanel(QWidget):
                     app_name = os.path.basename(action_data)
                     description = f"Launch: {app_name}"
                 elif action_type == "shell_command":
-                    command_text = shell_command_edit.text()
-                    # Truncate long commands for display
-                    if len(command_text) > 30:
-                        command_text = command_text[:27] + "..."
-                    description = f"Command: {command_text}"
+                    command_text = shell_command_edit.toPlainText()
+                    # Handle multiline commands in description
+                    if "\n" in command_text:
+                        command_lines = command_text.split("\n")
+                        first_line = command_lines[0]
+                        description = f"Command: {first_line[:20]}... (+{len(command_lines)-1} more lines)"
+                    else:
+                        # Truncate long commands for display
+                        if len(command_text) > 30:
+                            command_text = command_text[:27] + "..."
+                        description = f"Command: {command_text}"
             
             # Add mapping to configuration
             if "profiles" not in self.config:
@@ -782,9 +804,34 @@ class SettingsPanel(QWidget):
         shell_widget = QWidget()
         shell_layout = QVBoxLayout(shell_widget)
         
-        shell_command_edit = QLineEdit()
+        # Use QTextEdit instead of QLineEdit for better multi-line support
+        from PyQt5.QtWidgets import QTextEdit
+        shell_command_edit = QTextEdit()
         shell_command_edit.setPlaceholderText("Enter shell command...")
+        shell_command_edit.setMinimumHeight(100)  # Give more space for commands
+        shell_command_edit.setAcceptRichText(False)  # Plain text only
+        
+        # Set up for better copy/paste
+        shell_command_edit.setContextMenuPolicy(Qt.DefaultContextMenu)
         shell_layout.addWidget(shell_command_edit)
+        
+        # Instructions
+        paste_help = QLabel(f"Press Ctrl+V (or {SUPER_KEY_NAME}+V on Mac) to paste. Multi-line commands supported.")
+        paste_help.setStyleSheet("color: gray; font-style: italic; font-size: 9pt;")
+        shell_layout.addWidget(paste_help)
+        
+        # Add buttons for clipboard operations
+        clipboard_layout = QHBoxLayout()
+        
+        paste_button = QPushButton("Paste from Clipboard")
+        paste_button.clicked.connect(lambda: self._paste_to_text_edit(shell_command_edit))
+        clipboard_layout.addWidget(paste_button)
+        
+        clear_button = QPushButton("Clear")
+        clear_button.clicked.connect(lambda: shell_command_edit.clear())
+        clipboard_layout.addWidget(clear_button)
+        
+        shell_layout.addLayout(clipboard_layout)
         
         shell_hint = QLabel("Example: ls -la or python script.py")
         shell_hint.setStyleSheet("color: gray; font-style: italic;")
@@ -854,7 +901,7 @@ class SettingsPanel(QWidget):
                 action_data = app_path_edit.text()
             elif action_type == "shell_command":
                 action_data = {
-                    "command": shell_command_edit.text(),
+                    "command": shell_command_edit.toPlainText(),  # Use toPlainText() for QTextEdit
                     "terminal": run_in_terminal_check.isChecked()
                 }
             else:
@@ -873,11 +920,17 @@ class SettingsPanel(QWidget):
                     app_name = os.path.basename(action_data)
                     description = f"Launch: {app_name}"
                 elif action_type == "shell_command":
-                    command_text = shell_command_edit.text()
-                    # Truncate long commands for display
-                    if len(command_text) > 30:
-                        command_text = command_text[:27] + "..."
-                    description = f"Command: {command_text}"
+                    command_text = shell_command_edit.toPlainText()
+                    # Handle multiline commands in description
+                    if "\n" in command_text:
+                        command_lines = command_text.split("\n")
+                        first_line = command_lines[0]
+                        description = f"Command: {first_line[:20]}... (+{len(command_lines)-1} more lines)"
+                    else:
+                        # Truncate long commands for display
+                        if len(command_text) > 30:
+                            command_text = command_text[:27] + "..."
+                        description = f"Command: {command_text}"
             
             # Prepare and store the updated action configuration
             action_config = {
@@ -1740,10 +1793,17 @@ class SettingsPanel(QWidget):
                     # Get the active slot index
                     active_index = self.parent().active_key_slot
                     
-                    # Skip if not a valid key or modifier key alone
+                    # Skip if modifier key alone
                     if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta, 
                               Qt.Key_Super_L, Qt.Key_Super_R, Qt.Key_AltGr):
                         return True
+                    
+                    # Special handling for standard shortcut keys (Ctrl+V, Ctrl+C, etc.)
+                    # Allow application shortcut processing to proceed if standard shortcut keys are pressed
+                    if modifiers & (Qt.ControlModifier | Qt.MetaModifier) and key in (
+                        Qt.Key_C, Qt.Key_V, Qt.Key_X, Qt.Key_A, Qt.Key_Z):
+                        # Let the standard shortcuts work normally
+                        return False
                     
                     # Convert key to readable text
                     if key in self.key_map:
@@ -1751,20 +1811,28 @@ class SettingsPanel(QWidget):
                     else:
                         # For regular keys (letters, numbers, symbols)
                         key_text = QKeySequence(key).toString().lower()
-                    
+                        
+                        # For some reason, sometimes QKeySequence returns empty string
+                        # Try to handle common cases manually
+                        if not key_text and key >= Qt.Key_A and key <= Qt.Key_Z:
+                            key_text = chr(key - Qt.Key_A + ord('a'))
+                        elif not key_text and key >= Qt.Key_0 and key <= Qt.Key_9:
+                            key_text = chr(key - Qt.Key_0 + ord('0'))
+                        
                     # Log for debugging
                     logger.debug(f"Key pressed: {key}, mapped to: {key_text}, modifiers: {modifiers}")
                     
                     # Update the active slot with the pressed key
-                    self.key_slots[active_index].setText(key_text)
-                    
-                    # Update the full key sequence
-                    update_key_sequence()
-                    
-                    # Move to the next slot if possible
-                    if not select_next_slot(active_index):
-                        # If we're at the last slot, clear focus
-                        self.key_slots[active_index].clearFocus()
+                    if key_text:  # Only update if we got a valid key text
+                        self.key_slots[active_index].setText(key_text)
+                        
+                        # Update the full key sequence
+                        update_key_sequence()
+                        
+                        # Move to the next slot if possible
+                        if not select_next_slot(active_index):
+                            # If we're at the last slot, clear focus
+                            self.key_slots[active_index].clearFocus()
                     
                     return True
                 
@@ -1805,3 +1873,74 @@ class SettingsPanel(QWidget):
         
         # Set focus to the first slot
         key_slots[0].setFocus()
+
+    def _paste_from_clipboard(self, text_edit):
+        """Paste text from clipboard into the given text edit widget"""
+        from PyQt5.QtWidgets import QApplication
+        
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        
+        if text:
+            # Insert text at cursor position
+            current_text = text_edit.text()
+            cursor_pos = text_edit.cursorPosition()
+            
+            # Combine text
+            new_text = current_text[:cursor_pos] + text + current_text[cursor_pos:]
+            
+            # Set text and move cursor to end of pasted text
+            text_edit.setText(new_text)
+            text_edit.setCursorPosition(cursor_pos + len(text))
+            
+            # Ensure text edit has focus
+            text_edit.setFocus()
+        else:
+            logger.debug("Clipboard is empty, nothing to paste")
+
+    def _paste_to_text_edit(self, text_edit):
+        """Paste text from clipboard into the given text edit widget (works with QTextEdit)"""
+        from PyQt5.QtWidgets import QApplication
+        
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        
+        if text:
+            # For QTextEdit, use insertPlainText for best compatibility
+            text_edit.insertPlainText(text)
+            # Ensure text edit has focus
+            text_edit.setFocus()
+        else:
+            logger.debug("Clipboard is empty, nothing to paste")
+
+    def focusInEvent(self, event):
+        """Handle when the application regains focus"""
+        super().focusInEvent(event)
+        # This helps with ensuring keyboard shortcuts work after switching applications
+        QApplication.processEvents()
+            
+    def eventFilter(self, obj, event):
+        """Custom event filter to better handle focus and key events"""
+        if isinstance(obj, QLineEdit) and event.type() == QEvent.FocusIn:
+            # Reset state when a line edit receives focus
+            obj.deselect()  # Avoid full text selection which can lead to accidental deletion
+            
+        # Allow standard event processing
+        return super().eventFilter(event)
+
+# Register event filters for the entire application at startup
+from PyQt5.QtWidgets import QApplication
+app = QApplication.instance()
+if app:
+    # Create a global event filter for the application
+    class GlobalEventFilter(QObject):
+        def eventFilter(self, obj, event):
+            # Handle application focus changes
+            if event.type() == QEvent.ApplicationActivate:
+                # App regained focus, process events to ensure widgets update correctly
+                QApplication.processEvents()
+            return False
+    
+    # Install the global event filter
+    global_filter = GlobalEventFilter()
+    app.installEventFilter(global_filter)
