@@ -359,107 +359,6 @@ class SettingsPanel(QWidget):
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
 
-    def _populate_gesture_mapping_ui(self):
-        """Populate the gesture mapping interface from current configuration"""
-        # Clear existing items
-        self.profile_combo.clear()
-        self.mappings_table.setRowCount(0)
-        
-        # Get profiles from config
-        profiles = self.config.get("profiles", {})
-        
-        # Add profiles to combo box
-        for profile_name in profiles.keys():
-            self.profile_combo.addItem(profile_name)
-        
-        # Select active profile
-        active_profile = self.config.get("actions", {}).get("default_profile", "default")
-        index = self.profile_combo.findText(active_profile)
-        if index >= 0:
-            self.profile_combo.setCurrentIndex(index)
-        
-        # Connect change signal (after populating to avoid triggering during setup)
-        self.profile_combo.currentIndexChanged.connect(self._profile_selected)
-        
-        # Load mappings for selected profile
-        self._load_profile_mappings()
-
-    def _load_profile_mappings(self):
-        """Load mappings for the currently selected profile"""
-        profile_name = self.profile_combo.currentText()
-        if not profile_name:
-            return
-        
-        # Get mappings for this profile
-        profiles = self.config.get("profiles", {})
-        profile = profiles.get(profile_name, {})
-        mappings = profile.get("gesture_mappings", {})
-        
-        # Clear and populate table
-        self.mappings_table.setRowCount(0)
-        
-        row = 0
-        for gesture_name, action_config in mappings.items():
-            self.mappings_table.insertRow(row)
-            
-            # Gesture name
-            self.mappings_table.setItem(row, 0, QTableWidgetItem(gesture_name))
-            
-            # Action type and data
-            action_type = action_config.get("type", "")
-            action_data = action_config.get("data", "")
-            action_text = f"{action_type}: {action_data}"
-            self.mappings_table.setItem(row, 1, QTableWidgetItem(action_text))
-            
-            # Description
-            description = action_config.get("description", "")
-            self.mappings_table.setItem(row, 2, QTableWidgetItem(description))
-            
-            row += 1
-        
-        # Mark settings as unchanged since this is just initial load
-        self.changes_made = False
-
-    @pyqtSlot(int)
-    def _profile_selected(self, index):
-        """Handle when a different profile is selected"""
-        self._load_profile_mappings()
-        self._setting_changed()
-
-    @pyqtSlot()
-    def _add_new_profile(self):
-        """Add a new gesture mapping profile"""
-        profile_name, ok = QInputDialog.getText(
-            self, 
-            "New Profile", 
-            "Enter name for new profile:"
-        )
-        
-        if ok and profile_name:
-            # Check if profile already exists
-            if profile_name in self.config.get("profiles", {}):
-                QMessageBox.warning(
-                    self,
-                    "Duplicate Profile",
-                    f"Profile '{profile_name}' already exists."
-                )
-                return
-            
-            # Add new profile to config
-            if "profiles" not in self.config:
-                self.config["profiles"] = {}
-            
-            self.config["profiles"][profile_name] = {
-                "gesture_mappings": {}
-            }
-            
-            # Update UI
-            self.profile_combo.addItem(profile_name)
-            self.profile_combo.setCurrentText(profile_name)
-            
-            # Mark settings as changed
-            self._setting_changed()
-
     @pyqtSlot()
     def _add_new_mapping(self):
         """Add a new gesture-to-action mapping"""
@@ -569,10 +468,19 @@ class SettingsPanel(QWidget):
         
         shell_layout.addLayout(clipboard_layout)
         
+        shell_hint = QLabel("Example: ls -la or python script.py")
+        shell_hint.setStyleSheet("color: gray; font-style: italic;")
+        shell_layout.addWidget(shell_hint)
+        
         run_in_terminal_check = QCheckBox("Run in terminal window")
         shell_layout.addWidget(run_in_terminal_check)
         
         input_stack.addWidget(shell_widget)
+        
+        # Create wrapper widget for the stack
+        stack_widget = QWidget()
+        stack_widget.setLayout(input_stack)
+        form.addRow("Action Data:", stack_widget)
         
         # Action description
         description_edit = QLineEdit()
@@ -625,7 +533,7 @@ class SettingsPanel(QWidget):
                 action_data = app_path_edit.text()
             elif action_type == "shell_command":
                 action_data = {
-                    "command": shell_command_edit.toPlainText(),  # Use toPlainText() for QTextEdit
+                    "command": shell_command_edit.toPlainText(),
                     "terminal": run_in_terminal_check.isChecked()
                 }
             else:
@@ -679,21 +587,108 @@ class SettingsPanel(QWidget):
             # Update UI
             self._load_profile_mappings()
             self._setting_changed()
-    
-    def _browse_for_application(self, line_edit):
-        """Open a file dialog to browse for an application"""
-        from PyQt5.QtWidgets import QFileDialog
+
+    def _populate_gesture_mapping_ui(self):
+        """Populate the gesture mapping interface from current configuration"""
+        # Clear existing items
+        self.profile_combo.clear()
+        self.mappings_table.setRowCount(0)
         
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Application",
-            os.path.expanduser("~"),
-            "Applications (*.exe *.AppImage *.app);;All Files (*)"
+        # Get profiles from config
+        profiles = self.config.get("profiles", {})
+        
+        # Add profiles to combo box
+        for profile_name in profiles.keys():
+            self.profile_combo.addItem(profile_name)
+        
+        # Select active profile
+        active_profile = self.config.get("actions", {}).get("default_profile", "default")
+        index = self.profile_combo.findText(active_profile)
+        if index >= 0:
+            self.profile_combo.setCurrentIndex(index)
+        
+        # Connect change signal (after populating to avoid triggering during setup)
+        self.profile_combo.currentIndexChanged.connect(self._profile_selected)
+        
+        # Load mappings for selected profile
+        self._load_profile_mappings()
+
+    def _load_profile_mappings(self):
+        """Load mappings for the currently selected profile"""
+        profile_name = self.profile_combo.currentText()
+        if not profile_name:
+            return
+        
+        # Get mappings for this profile
+        profiles = self.config.get("profiles", {})
+        profile = profiles.get(profile_name, {})
+        mappings = profile.get("gesture_mappings", {})
+        
+        # Clear and populate table
+        self.mappings_table.setRowCount(0)
+        
+        row = 0
+        for gesture_name, action_config in mappings.items():
+            self.mappings_table.insertRow(row)
+            
+            # Gesture name
+            self.mappings_table.setItem(row, 0, QTableWidgetItem(gesture_name))
+            
+            # Action type and data
+            action_type = action_config.get("type", "")
+            action_data = action_config.get("data", "")
+            action_text = f"{action_type}: {action_data}"
+            self.mappings_table.setItem(row, 1, QTableWidgetItem(action_text))
+            
+            # Description
+            description = action_config.get("description", "")
+            self.mappings_table.setItem(row, 2, QTableWidgetItem(description))
+            
+            row += 1
+        
+        # Mark settings as unchanged since this is just initial load
+        self.changes_made = False
+
+    @pyqtSlot(int)
+    def _profile_selected(self, index):
+        """Handle when a different profile is selected"""
+        self._load_profile_mappings()
+        self._setting_changed()
+
+    @pyqtSlot()
+    def _add_new_profile(self):
+        """Add a new gesture mapping profile"""
+        profile_name, ok = QInputDialog.getText(
+            self, 
+            "New Profile", 
+            "Enter name for new profile:"
         )
         
-        if file_path:
-            line_edit.setText(file_path)
+        if ok and profile_name:
+            # Check if profile already exists
+            if profile_name in self.config.get("profiles", {}):
+                QMessageBox.warning(
+                    self,
+                    "Duplicate Profile",
+                    f"Profile '{profile_name}' already exists."
+                )
+                return
             
+            # Add new profile to config
+            if "profiles" not in self.config:
+                self.config["profiles"] = {}
+            
+            self.config["profiles"][profile_name] = {
+                "gesture_mappings": {}
+            }
+            
+            # Update UI
+            self.profile_combo.addItem(profile_name)
+            self.profile_combo.setCurrentText(profile_name)
+            
+            # Mark settings as changed
+            self._setting_changed()
+
     @pyqtSlot(QTableWidgetItem)
     def _edit_mapping(self, item):
         """Edit a gesture mapping when double-clicked"""
