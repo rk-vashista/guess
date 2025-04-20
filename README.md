@@ -74,8 +74,8 @@ Using your webcam and advanced computer vision, GestureBind recognizes hand gest
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/gesturebind.git
-cd gesturebind
+git clone https://github.com/yourusername/guess.git
+cd guess/gesturebind
 
 # Create a virtual environment
 python -m venv venv
