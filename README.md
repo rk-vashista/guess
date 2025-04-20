@@ -2,7 +2,6 @@
 
 <div align="center">
   
-<img src="https://via.placeholder.com/200x200.png?text=GestureBind" alt="GestureBind Logo" style="border-radius: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
 
 **Control your computer with hand gestures ✌️ 👆 👍**
 

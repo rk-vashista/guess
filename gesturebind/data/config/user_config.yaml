@@ -52,7 +52,7 @@ profiles:
     gesture_mappings:
       peace:
         data: Ctrl+V
-        description: 'Hotkey: super+d'
+        description: 'Hotkey: CTRL+V'
         type: hotkey
       thumb:
         data:
